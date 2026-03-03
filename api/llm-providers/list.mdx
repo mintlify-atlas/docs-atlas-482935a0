@@ -1,0 +1,72 @@
+---
+title: List LLM Providers
+description: Retrieve all configured LLM providers
+---
+
+## GET /v1/llm-providers
+
+Retrieve all LLM providers configured in the organization.
+
+### Response
+
+Returns a wrapper object with the provider array.
+
+<ResponseField name="data" type="array">
+  Array of provider objects
+</ResponseField>
+
+<ResponseField name="total" type="integer">
+  Total count of providers
+</ResponseField>
+
+### Provider Fields
+
+<ResponseField name="id" type="string">
+  UUID of the provider
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Provider name
+</ResponseField>
+
+<ResponseField name="provider_type" type="string">
+  Provider type: `openai`, `openai_completions`, `anthropic`, `gemini`
+</ResponseField>
+
+<ResponseField name="base_url" type="string">
+  Optional custom base URL for OpenAI-compatible providers
+</ResponseField>
+
+### Example Request
+
+```bash
+curl http://localhost:9300/v1/llm-providers
+```
+
+### Example Response
+
+```json
+{
+  "data": [
+    {
+      "id": "01933b5a-0000-7000-8000-000000000001",
+      "name": "OpenAI",
+      "provider_type": "openai",
+      "base_url": null,
+      "created_at": "2024-01-15T10:30:00Z"
+    },
+    {
+      "id": "01933b5a-0000-7000-8000-000000000002",
+      "name": "Anthropic",
+      "provider_type": "anthropic",
+      "base_url": null,
+      "created_at": "2024-01-15T10:31:00Z"
+    }
+  ],
+  "total": 2
+}
+```
+
+<Note>
+  API keys are encrypted and never returned in responses. Use the [LLM Providers integration guide](/integrations/llm-providers) to learn about provider configuration.
+</Note>

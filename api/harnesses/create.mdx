@@ -1,0 +1,50 @@
+---
+title: Create Harness
+description: Create a new harness configuration
+---
+
+## POST /v1/harnesses
+
+Create a new harness that defines the base environment and capabilities for sessions.
+
+### Request Body
+
+<ParamField path="name" type="string" required>
+  Harness name for display purposes
+</ParamField>
+
+<ParamField path="type" type="string" required>
+  Harness type: `base` or `generic`
+</ParamField>
+
+<ParamField path="description" type="string">
+  Optional description
+</ParamField>
+
+<ParamField path="capabilities" type="array">
+  List of capability references to enable at the harness level
+</ParamField>
+
+### Response
+
+Returns the created harness object.
+
+### Example Request
+
+```bash
+curl -X POST http://localhost:9300/v1/harnesses \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Development Environment",
+    "type": "base",
+    "description": "Base harness for development work",
+    "capabilities": [
+      "session_file_system",
+      "virtual_bash"
+    ]
+  }'
+```
+
+<Note>
+  Harnesses define infrastructure-level capabilities that apply to all sessions using this harness. Agent-level capabilities are then added on top.
+</Note>

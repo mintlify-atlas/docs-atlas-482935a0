@@ -1,0 +1,71 @@
+---
+title: Sync Models
+description: Discover and sync models from a provider's API
+---
+
+## POST /v1/llm-providers/{id}/sync-models
+
+Discover available models from a provider's API and sync them to your organization.
+
+### Path Parameters
+
+<ParamField path="id" type="string" required>
+  UUID of the provider
+</ParamField>
+
+### Response (Success)
+
+<ResponseField name="status" type="string">
+  Always `"success"` when models are synced
+</ResponseField>
+
+<ResponseField name="created" type="integer">
+  Number of new models created
+</ResponseField>
+
+<ResponseField name="updated" type="integer">
+  Number of existing models updated
+</ResponseField>
+
+<ResponseField name="stale" type="integer">
+  Number of models marked as stale
+</ResponseField>
+
+### Response (Not Supported)
+
+<ResponseField name="status" type="string">
+  Returns `"not_supported"` if provider doesn't support model listing
+</ResponseField>
+
+### Example Request
+
+```bash
+curl -X POST http://localhost:9300/v1/llm-providers/01933b5a-0000-7000-8000-000000000001/sync-models
+```
+
+### Example Response (Success)
+
+```json
+{
+  "status": "success",
+  "created": 5,
+  "updated": 10,
+  "stale": 2
+}
+```
+
+### Example Response (Not Supported)
+
+```json
+{
+  "status": "not_supported"
+}
+```
+
+<Note>
+  Providers with custom base URLs or those that don't support model listing return `not_supported`. In this case, you can manually add models using `POST /v1/llm-providers/{id}/models`.
+</Note>
+
+<Tip>
+  Run model sync periodically to keep your model catalog up to date with new releases from providers.
+</Tip>

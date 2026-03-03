@@ -123,6 +123,22 @@
               "api/capabilities/list",
               "api/capabilities/get"
             ]
+          },
+          {
+            "group": "Harnesses",
+            "pages": [
+              "api/harnesses/create",
+              "api/harnesses/list",
+              "api/harnesses/get"
+            ]
+          },
+          {
+            "group": "LLM Providers",
+            "pages": [
+              "api/llm-providers/list",
+              "api/llm-providers/create",
+              "api/llm-providers/sync-models"
+            ]
           }
         ]
       },

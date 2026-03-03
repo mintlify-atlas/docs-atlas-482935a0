@@ -1,0 +1,58 @@
+---
+title: Create LLM Provider
+description: Add a new LLM provider
+---
+
+## POST /v1/llm-providers
+
+Add a new LLM provider to your organization.
+
+### Request Body
+
+<ParamField path="name" type="string" required>
+  Display name for the provider
+</ParamField>
+
+<ParamField path="provider_type" type="string" required>
+  Provider type: `openai`, `openai_completions`, `anthropic`, `gemini`
+</ParamField>
+
+<ParamField path="api_key" type="string" required>
+  API key for the provider (encrypted at rest)
+</ParamField>
+
+<ParamField path="base_url" type="string">
+  Optional custom base URL for OpenAI-compatible providers
+</ParamField>
+
+### Response
+
+Returns the created provider object (API key is not included in response).
+
+### Example Request
+
+```bash
+curl -X POST http://localhost:9300/v1/llm-providers \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "My OpenAI",
+    "provider_type": "openai",
+    "api_key": "sk-..."
+  }'
+```
+
+### Example Response
+
+```json
+{
+  "id": "01933b5a-0000-7000-8000-000000000003",
+  "name": "My OpenAI",
+  "provider_type": "openai",
+  "base_url": null,
+  "created_at": "2024-01-15T10:35:00Z"
+}
+```
+
+<Warning>
+  API keys are encrypted using AES-256-GCM envelope encryption. Store the API key securely as it cannot be retrieved after creation.
+</Warning>
