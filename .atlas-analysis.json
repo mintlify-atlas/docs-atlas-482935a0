@@ -1,0 +1,163 @@
+{
+  "projectType": "saas",
+  "projectName": "Everruns",
+  "projectDescription": "Headless durable agentic harness engine for running AI agents reliably and scalably",
+  "theme": "aspen",
+  "primaryColor": "#D4A43A",
+  "lightColor": "#0A1636",
+  "darkColor": "#081C3F",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/overview",
+              "concepts/agents",
+              "concepts/harnesses",
+              "concepts/sessions",
+              "concepts/capabilities",
+              "concepts/durable-execution"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/creating-agents",
+              "guides/managing-sessions",
+              "guides/adding-capabilities",
+              "guides/streaming-events",
+              "guides/using-cli"
+            ]
+          },
+          {
+            "group": "Integrations",
+            "pages": [
+              "integrations/llm-providers",
+              "integrations/mcp-servers",
+              "integrations/sandboxes",
+              "integrations/brave-search"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "deployment/docker-compose",
+              "deployment/environment-variables",
+              "deployment/authentication",
+              "deployment/multi-instance"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "api/overview",
+              "api/authentication",
+              "api/errors"
+            ]
+          },
+          {
+            "group": "Agents",
+            "pages": [
+              "api/agents/create",
+              "api/agents/list",
+              "api/agents/get",
+              "api/agents/update",
+              "api/agents/delete"
+            ]
+          },
+          {
+            "group": "Sessions",
+            "pages": [
+              "api/sessions/create",
+              "api/sessions/list",
+              "api/sessions/get",
+              "api/sessions/update",
+              "api/sessions/cancel"
+            ]
+          },
+          {
+            "group": "Messages",
+            "pages": [
+              "api/messages/create",
+              "api/messages/list"
+            ]
+          },
+          {
+            "group": "Events",
+            "pages": [
+              "api/events/stream",
+              "api/events/list"
+            ]
+          },
+          {
+            "group": "Capabilities",
+            "pages": [
+              "api/capabilities/list",
+              "api/capabilities/get"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "SDK",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "sdk/installation",
+              "sdk/quickstart"
+            ]
+          },
+          {
+            "group": "Usage",
+            "pages": [
+              "sdk/agents",
+              "sdk/sessions",
+              "sdk/messages",
+              "sdk/streaming"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Durable execution with PostgreSQL-backed workflows",
+    "Real-time SSE streaming of agent responses and tool calls",
+    "Multi-provider LLM support (OpenAI, Anthropic, Gemini)",
+    "Extensible capabilities system for modular agent functionality",
+    "Session filesystem and key-value storage",
+    "MCP (Model Context Protocol) server integration",
+    "Management UI and CLI for agents and sessions",
+    "Cloud sandbox integrations (Docker, CodeSandbox, Daytona)"
+  ],
+  "publicApiSurface": [
+    "POST /v1/agents - Create agent",
+    "GET /v1/agents - List agents",
+    "POST /v1/sessions - Create session",
+    "GET /v1/sessions - List sessions",
+    "POST /v1/sessions/{id}/messages - Send message",
+    "GET /v1/sessions/{id}/sse - Stream events",
+    "GET /v1/capabilities - List capabilities",
+    "GET /v1/llm-providers - List LLM providers",
+    "POST /v1/llm-providers/{id}/sync-models - Sync models",
+    "everruns CLI - Command-line interface",
+    "everruns-sdk - TypeScript SDK"
+  ]
+}
