@@ -1,0 +1,157 @@
+---
+title: "Create Message"
+description: "Send a message to a session and trigger workflow execution"
+---
+
+## POST /v1/sessions/{session_id}/messages
+
+Create a new message in a session. This triggers the agent workflow execution.
+
+### Path Parameters
+
+<ParamField path="session_id" type="string" required>
+  The unique identifier of the session
+</ParamField>
+
+### Request Body
+
+<ParamField body="message" type="object" required>
+  The message object to create
+  
+  <ParamField body="message.content" type="array" required>
+    Array of content parts. Each part can be text or an image file.
+    
+    **Text content part:**
+    ```json
+    { "type": "text", "text": "Your message here" }
+    ```
+    
+    **Image content part:**
+    ```json
+    { "type": "image_file", "image_id": "01933b5a-...", "filename": "photo.png" }
+    ```
+  </ParamField>
+  
+  <ParamField body="message.controls" type="object">
+    Optional control parameters for the message
+    
+    <ParamField body="message.controls.max_tokens" type="integer">
+      Maximum tokens to generate in response
+    </ParamField>
+  </ParamField>
+  
+  <ParamField body="message.metadata" type="object">
+    Optional arbitrary metadata for the message
+  </ParamField>
+</ParamField>
+
+### Response
+
+Returns the created message object with generated ID and timestamp.
+
+<ResponseField name="id" type="string">
+  Message identifier (UUID v7)
+</ResponseField>
+
+<ResponseField name="role" type="string">
+  Message role: `user`, `agent`, or `tool`
+</ResponseField>
+
+<ResponseField name="content" type="array">
+  Array of content parts
+</ResponseField>
+
+<ResponseField name="controls" type="object">
+  Control parameters (if provided)
+</ResponseField>
+
+<ResponseField name="metadata" type="object">
+  Message metadata (if provided)
+</ResponseField>
+
+<ResponseField name="created_at" type="string">
+  ISO 8601 timestamp
+</ResponseField>
+
+### Example Request
+
+```bash
+curl -X POST https://api.everruns.com/v1/sessions/{session_id}/messages \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": {
+      "content": [
+        { "type": "text", "text": "What is the weather in Tokyo?" }
+      ]
+    }
+  }'
+```
+
+### Example with Image
+
+```bash
+curl -X POST https://api.everruns.com/v1/sessions/{session_id}/messages \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": {
+      "content": [
+        { "type": "text", "text": "What is in this image?" },
+        { "type": "image_file", "image_id": "01933b5a-...", "filename": "photo.png" }
+      ]
+    }
+  }'
+```
+
+### Example Response
+
+```json
+{
+  "id": "01937abc-def0-7000-8000-000000000001",
+  "role": "user",
+  "content": [
+    { "type": "text", "text": "What is the weather in Tokyo?" }
+  ],
+  "created_at": "2024-01-15T10:30:00.000Z"
+}
+```
+
+## Workflow Execution
+
+Creating a message triggers the agent workflow:
+
+1. **Message Storage**: The user message is persisted and an `input.message` event is emitted
+2. **Turn Execution**: A new turn begins with `turn.started` event
+3. **Session Activation**: `session.activated` event signals the session is active
+4. **Agent Processing**: The agent processes the message through its reasoning and action loop
+5. **Response**: Agent emits `output.message.started`, `output.message.delta` (streaming), and `output.message.completed` events
+6. **Session Idle**: `session.idled` event signals turn completion
+
+## Event Streaming
+
+To receive real-time updates during workflow execution, connect to the SSE endpoint before sending the message:
+
+```bash
+curl -N https://api.everruns.com/v1/sessions/{session_id}/sse \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+See [Event Streaming](/api/events/stream) for details.
+
+## Error Responses
+
+<ResponseField name="error" type="string">
+  Error message
+</ResponseField>
+
+<ResponseField name="status" type="integer">
+  HTTP status code
+</ResponseField>
+
+### Common Errors
+
+- **400 Bad Request**: Invalid message format or missing required fields
+- **404 Not Found**: Session does not exist
+- **422 Unprocessable Entity**: Message validation failed
+- **500 Internal Server Error**: Server error during processing

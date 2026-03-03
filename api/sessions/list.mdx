@@ -1,0 +1,127 @@
+---
+title: List Sessions
+description: List sessions with optional filtering and pagination
+---
+
+## GET /v1/sessions
+
+Returns a paginated list of sessions in the organization.
+
+## Query Parameters
+
+<ParamField query="agent_id" type="string">
+  Optional filter to return only sessions assigned to a specific agent.
+  
+  Without this parameter, returns all sessions in the organization.
+</ParamField>
+
+<ParamField query="offset" type="integer" default="0">
+  Number of items to skip for pagination.
+</ParamField>
+
+<ParamField query="limit" type="integer" default="20">
+  Maximum number of items to return per page. Maximum value is 100.
+</ParamField>
+
+## Response
+
+Returns a paginated response with session objects.
+
+<ResponseField name="data" type="object[]">
+  Array of `Session` objects for the current page. Ordered by `created_at DESC`.
+</ResponseField>
+
+<ResponseField name="total" type="integer">
+  Total count of sessions across all pages.
+</ResponseField>
+
+<ResponseField name="offset" type="integer">
+  Current offset (echoed from request).
+</ResponseField>
+
+<ResponseField name="limit" type="integer">
+  Current limit (echoed from request).
+</ResponseField>
+
+## Session Object
+
+Each session in the `data` array contains:
+
+<ResponseField name="id" type="string">
+  The session's public ID with the `session_` prefix.
+</ResponseField>
+
+<ResponseField name="agent_id" type="string">
+  The ID of the agent assigned to this session.
+</ResponseField>
+
+<ResponseField name="title" type="string">
+  The session title.
+</ResponseField>
+
+<ResponseField name="tags" type="string[]">
+  Tags associated with the session.
+</ResponseField>
+
+<ResponseField name="model_id" type="string">
+  Model override for this session, if set.
+</ResponseField>
+
+<ResponseField name="capabilities" type="object[]">
+  Session-level capabilities (additive to agent capabilities).
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Current session status: `started`, `active`, or `idle`.
+</ResponseField>
+
+<ResponseField name="features" type="string[]">
+  Computed at read time by aggregating features from all active capabilities.
+</ResponseField>
+
+<ResponseField name="created_at" type="string">
+  ISO 8601 timestamp when the session was created.
+</ResponseField>
+
+<ResponseField name="updated_at" type="string">
+  ISO 8601 timestamp when the session was last updated.
+</ResponseField>
+
+## Examples
+
+### List all sessions
+
+```bash
+curl https://api.everruns.com/v1/sessions \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+### Filter by agent
+
+```bash
+curl "https://api.everruns.com/v1/sessions?agent_id=agent_01234567-89ab-cdef-0123-456789abcdef" \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+### Pagination
+
+```bash
+# First page (default)
+curl https://api.everruns.com/v1/sessions \
+  -H "Authorization: Bearer YOUR_API_KEY"
+
+# Second page
+curl "https://api.everruns.com/v1/sessions?offset=20&limit=20" \
+  -H "Authorization: Bearer YOUR_API_KEY"
+
+# Custom page size
+curl "https://api.everruns.com/v1/sessions?limit=10" \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+## Notes
+
+- Results are ordered by `created_at DESC` (newest first)
+- Default pagination limit is 20 items per page
+- Maximum pagination limit is 100 items per page
+- Without `agent_id` filter, returns all sessions in the organization

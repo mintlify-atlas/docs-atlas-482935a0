@@ -1,0 +1,293 @@
+---
+title: "List Events"
+description: "Retrieve events as JSON for a session"
+---
+
+## GET /v1/sessions/{session_id}/events
+
+List events for a session as JSON. This is an alternative to the SSE endpoint for non-streaming use cases.
+
+### Path Parameters
+
+<ParamField path="session_id" type="string" required>
+  The unique identifier of the session
+</ParamField>
+
+### Query Parameters
+
+<ParamField query="since_id" type="string">
+  Return events after this event ID. Used for pagination and incremental fetching.
+</ParamField>
+
+<ParamField query="types" type="array">
+  **Positive filter**: Only return events matching these types. Empty = all types.
+  
+  Repeated key format: `?types=turn.started&types=turn.completed`
+  
+  Maximum 25 values. Must be known event types.
+</ParamField>
+
+<ParamField query="exclude" type="array">
+  **Negative filter**: Exclude events matching these types. Applied after `types` filter.
+  
+  Repeated key format: `?exclude=output.message.delta&exclude=reason.thinking.delta`
+  
+  Maximum 25 values. Must be known event types.
+</ParamField>
+
+### Filter Semantics
+
+When both `types` and `exclude` are provided:
+1. `types` narrows to matching event types first
+2. `exclude` removes from that set
+
+**Examples:**
+
+```bash
+# Only turn lifecycle events
+?types=turn.started&types=turn.completed&types=turn.failed
+
+# Everything except streaming deltas
+?exclude=output.message.delta&exclude=reason.thinking.delta
+
+# Turn events but not failures
+?types=turn.started&types=turn.completed&types=turn.failed&exclude=turn.failed
+```
+
+### Response
+
+Returns a non-paginated list of all events matching the filters.
+
+<ResponseField name="data" type="array">
+  Array of event objects
+  
+  <ResponseField name="data[].id" type="string">
+    Event identifier (UUID v7)
+  </ResponseField>
+  
+  <ResponseField name="data[].type" type="string">
+    Event type in dot notation (e.g., `input.message`, `turn.started`)
+  </ResponseField>
+  
+  <ResponseField name="data[].ts" type="string">
+    ISO 8601 timestamp with millisecond precision
+  </ResponseField>
+  
+  <ResponseField name="data[].session_id" type="string">
+    Session this event belongs to
+  </ResponseField>
+  
+  <ResponseField name="data[].context" type="object">
+    Correlation context for tracing
+  </ResponseField>
+  
+  <ResponseField name="data[].data" type="object">
+    Event-specific payload
+  </ResponseField>
+  
+  <ResponseField name="data[].metadata" type="object">
+    Optional arbitrary metadata
+  </ResponseField>
+  
+  <ResponseField name="data[].tags" type="array">
+    Tags for filtering and categorization
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="total" type="integer">
+  Total number of events returned
+</ResponseField>
+
+### Example Request
+
+```bash
+curl https://api.everruns.com/v1/sessions/{session_id}/events \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+### Example with Filters
+
+```bash
+# Get only turn events
+curl "https://api.everruns.com/v1/sessions/{session_id}/events?types=turn.started&types=turn.completed" \
+  -H "Authorization: Bearer YOUR_API_KEY"
+
+# Get all events except deltas
+curl "https://api.everruns.com/v1/sessions/{session_id}/events?exclude=output.message.delta&exclude=reason.thinking.delta" \
+  -H "Authorization: Bearer YOUR_API_KEY"
+
+# Get events since a specific ID
+curl "https://api.everruns.com/v1/sessions/{session_id}/events?since_id=01937abc-..." \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+### Example Response
+
+```json
+{
+  "data": [
+    {
+      "id": "01937abc-def0-7000-8000-000000000001",
+      "type": "input.message",
+      "ts": "2024-01-15T10:30:00.000Z",
+      "session_id": "01937abc-def0-7000-8000-000000000002",
+      "context": {},
+      "data": {
+        "message": {
+          "id": "01937abc-def0-7000-8000-000000000004",
+          "role": "user",
+          "content": [
+            { "type": "text", "text": "Hello, world!" }
+          ],
+          "created_at": "2024-01-15T10:30:00.000Z"
+        }
+      },
+      "metadata": {},
+      "tags": []
+    },
+    {
+      "id": "01937abc-def0-7000-8000-000000000005",
+      "type": "turn.started",
+      "ts": "2024-01-15T10:30:00.100Z",
+      "session_id": "01937abc-def0-7000-8000-000000000002",
+      "context": {
+        "turn_id": "01937abc-def0-7000-8000-000000000003"
+      },
+      "data": {
+        "turn_id": "01937abc-def0-7000-8000-000000000003",
+        "input_message_id": "01937abc-def0-7000-8000-000000000004"
+      },
+      "metadata": {},
+      "tags": []
+    },
+    {
+      "id": "01937abc-def0-7000-8000-000000000006",
+      "type": "output.message.completed",
+      "ts": "2024-01-15T10:30:01.000Z",
+      "session_id": "01937abc-def0-7000-8000-000000000002",
+      "context": {
+        "turn_id": "01937abc-def0-7000-8000-000000000003",
+        "input_message_id": "01937abc-def0-7000-8000-000000000004"
+      },
+      "data": {
+        "message": {
+          "id": "01937abc-def0-7000-8000-000000000007",
+          "role": "agent",
+          "content": [
+            { "type": "text", "text": "Hello! How can I help?" }
+          ],
+          "created_at": "2024-01-15T10:30:01.000Z"
+        },
+        "metadata": {
+          "model": "gpt-4o",
+          "model_id": "01937abc-def0-7000-8000-000000000008",
+          "provider_id": "01937abc-def0-7000-8000-000000000009"
+        },
+        "usage": {
+          "input_tokens": 50,
+          "output_tokens": 20
+        }
+      },
+      "metadata": {},
+      "tags": []
+    }
+  ],
+  "total": 3
+}
+```
+
+## Event Schema
+
+Every event conforms to the standard event schema. See [Event Streaming](/api/events/stream) for detailed field descriptions.
+
+## Common Event Types
+
+### Input Events
+
+- `input.message` - User message submitted
+
+### Output Events
+
+- `output.message.started` - Agent starts generating response
+- `output.message.delta` - Streaming text update (batched ~100ms)
+- `output.message.completed` - Agent response completed
+
+### Turn Events
+
+- `turn.started` - Turn execution started
+- `turn.completed` - Turn completed successfully
+- `turn.failed` - Turn failed
+- `turn.cancelled` - Turn cancelled by user
+
+### Session Events
+
+- `session.started` - Session execution started
+- `session.activated` - Session became active (turn started)
+- `session.idled` - Session became idle (turn completed, includes token usage)
+
+### Atom Events
+
+- `reason.started` / `reason.completed` - LLM reasoning phase
+- `act.started` / `act.completed` - Tool execution batch
+- `tool.started` / `tool.completed` - Individual tool execution
+
+### LLM Events
+
+- `llm.generation` - Full LLM API call with messages and response
+
+### Extended Thinking Events
+
+- `reason.thinking.started` - Extended thinking started
+- `reason.thinking.delta` - Streaming reasoning content
+- `reason.thinking.completed` - Extended thinking completed
+
+## Use Cases
+
+### Polling for New Events
+
+Use `since_id` to incrementally fetch new events:
+
+```bash
+# Initial fetch
+curl https://api.everruns.com/v1/sessions/{session_id}/events \
+  -H "Authorization: Bearer YOUR_API_KEY"
+
+# Store the last event ID from the response
+# Later, poll for new events:
+curl "https://api.everruns.com/v1/sessions/{session_id}/events?since_id=01937abc-..." \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+### Filtering Verbose Events
+
+Exclude high-frequency streaming events to reduce payload size:
+
+```bash
+curl "https://api.everruns.com/v1/sessions/{session_id}/events?exclude=output.message.delta&exclude=reason.thinking.delta" \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+### Monitoring Turn Lifecycle
+
+Get only turn lifecycle events for monitoring:
+
+```bash
+curl "https://api.everruns.com/v1/sessions/{session_id}/events?types=turn.started&types=turn.completed&types=turn.failed&types=turn.cancelled" \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+## Error Responses
+
+<ResponseField name="error" type="string">
+  Error message
+</ResponseField>
+
+<ResponseField name="status" type="integer">
+  HTTP status code
+</ResponseField>
+
+### Common Errors
+
+- **400 Bad Request**: Invalid filter parameters (unknown event type, too many values)
+- **404 Not Found**: Session does not exist
+- **500 Internal Server Error**: Server error during retrieval

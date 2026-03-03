@@ -1,0 +1,295 @@
+---
+title: "Stream Events (SSE)"
+description: "Real-time event streaming via Server-Sent Events"
+---
+
+## GET /v1/sessions/{session_id}/sse
+
+Stream real-time events from a session using Server-Sent Events (SSE). This provides live updates during agent workflow execution.
+
+### Path Parameters
+
+<ParamField path="session_id" type="string" required>
+  The unique identifier of the session
+</ParamField>
+
+### Query Parameters
+
+<ParamField query="since_id" type="string">
+  Resume streaming after this event ID. Used for reconnection to avoid missing events.
+</ParamField>
+
+<ParamField query="types" type="array">
+  **Positive filter**: Only return events matching these types. Empty = all types.
+  
+  Repeated key format: `?types=turn.started&types=turn.completed`
+  
+  Maximum 25 values. Must be known event types.
+</ParamField>
+
+<ParamField query="exclude" type="array">
+  **Negative filter**: Exclude events matching these types. Applied after `types` filter.
+  
+  Repeated key format: `?exclude=output.message.delta&exclude=reason.thinking.delta`
+  
+  Maximum 25 values. Must be known event types.
+</ParamField>
+
+### Filter Semantics
+
+When both `types` and `exclude` are provided:
+1. `types` narrows to matching event types first
+2. `exclude` removes from that set
+
+**Examples:**
+
+```bash
+# Only turn lifecycle events
+?types=turn.started&types=turn.completed&types=turn.failed
+
+# Everything except streaming deltas
+?exclude=output.message.delta&exclude=reason.thinking.delta
+
+# Turn events but not failures
+?types=turn.started&types=turn.completed&types=turn.failed&exclude=turn.failed
+```
+
+### Response Format
+
+SSE stream with `text/event-stream` content type. Each event follows this format:
+
+```
+event: <event_type>
+data: <json_payload>
+
+```
+
+### Event Schema
+
+Every event conforms to this standard schema:
+
+<ResponseField name="id" type="string">
+  Event identifier (UUID v7)
+</ResponseField>
+
+<ResponseField name="type" type="string">
+  Event type in dot notation (e.g., `input.message`, `turn.started`)
+</ResponseField>
+
+<ResponseField name="ts" type="string">
+  ISO 8601 timestamp with millisecond precision
+</ResponseField>
+
+<ResponseField name="session_id" type="string">
+  Session this event belongs to
+</ResponseField>
+
+<ResponseField name="context" type="object">
+  Correlation context for tracing
+  
+  <ResponseField name="context.turn_id" type="string">
+    Turn identifier (for turn-scoped events)
+  </ResponseField>
+  
+  <ResponseField name="context.input_message_id" type="string">
+    User message that triggered this turn
+  </ResponseField>
+  
+  <ResponseField name="context.exec_id" type="string">
+    Atom execution identifier
+  </ResponseField>
+  
+  <ResponseField name="context.trace_id" type="string">
+    OpenTelemetry-style trace ID
+  </ResponseField>
+  
+  <ResponseField name="context.span_id" type="string">
+    OpenTelemetry-style span ID
+  </ResponseField>
+  
+  <ResponseField name="context.parent_span_id" type="string">
+    Parent span ID for hierarchical linking
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="data" type="object">
+  Event-specific payload
+</ResponseField>
+
+<ResponseField name="metadata" type="object">
+  Optional arbitrary metadata
+</ResponseField>
+
+<ResponseField name="tags" type="array">
+  Tags for filtering and categorization
+</ResponseField>
+
+### Example: Connect with curl
+
+```bash
+curl -N https://api.everruns.com/v1/sessions/{session_id}/sse \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+### Example: Filter streaming deltas
+
+```bash
+curl -N "https://api.everruns.com/v1/sessions/{session_id}/sse?exclude=output.message.delta&exclude=reason.thinking.delta" \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+### Example: Only turn events
+
+```bash
+curl -N "https://api.everruns.com/v1/sessions/{session_id}/sse?types=turn.started&types=turn.completed&types=turn.failed" \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+### Example SSE Stream
+
+```
+event: connected
+data: {"status":"connected"}
+
+event: input.message
+data: {"id":"01937abc-...","type":"input.message","ts":"2024-01-15T10:30:00.000Z","session_id":"...","context":{},"data":{"message":{"id":"...","role":"user","content":[{"type":"text","text":"Hello"}],"created_at":"2024-01-15T10:30:00.000Z"}}}
+
+event: turn.started
+data: {"id":"01937abc-...","type":"turn.started","ts":"2024-01-15T10:30:00.100Z","session_id":"...","context":{"turn_id":"..."},"data":{"turn_id":"...","input_message_id":"..."}}
+
+event: output.message.started
+data: {"id":"01937abc-...","type":"output.message.started","ts":"2024-01-15T10:30:00.200Z","session_id":"...","context":{"turn_id":"..."},"data":{"turn_id":"...","model":"gpt-4o"}}
+
+event: output.message.delta
+data: {"id":"01937abc-...","type":"output.message.delta","ts":"2024-01-15T10:30:00.300Z","session_id":"...","context":{"turn_id":"..."},"data":{"turn_id":"...","delta":"Hello! ","accumulated":"Hello! "}}
+
+event: output.message.completed
+data: {"id":"01937abc-...","type":"output.message.completed","ts":"2024-01-15T10:30:01.000Z","session_id":"...","context":{"turn_id":"..."},"data":{"message":{"id":"...","role":"agent","content":[{"type":"text","text":"Hello! How can I help?"}],"created_at":"2024-01-15T10:30:01.000Z"},"metadata":{"model":"gpt-4o"},"usage":{"input_tokens":50,"output_tokens":20}}}
+
+event: turn.completed
+data: {"id":"01937abc-...","type":"turn.completed","ts":"2024-01-15T10:30:01.100Z","session_id":"...","context":{"turn_id":"..."},"data":{"turn_id":"...","iterations":1,"duration_ms":1000}}
+
+event: session.idled
+data: {"id":"01937abc-...","type":"session.idled","ts":"2024-01-15T10:30:01.200Z","session_id":"...","context":{"turn_id":"..."},"data":{"turn_id":"...","iterations":1,"usage":{"input_tokens":50,"output_tokens":20}}}
+```
+
+## Connection Lifecycle
+
+### Lifecycle Events
+
+| Event | Description |
+|-------|-------------|
+| `connected` | Sent immediately when stream is established. Data: `{"status":"connected"}` |
+| `disconnecting` | Sent before graceful close. Data: `{"reason":"connection_cycle","retry_ms":100}` |
+
+### Heartbeat Comments
+
+The stream sends periodic heartbeat comments every 30 seconds to detect stale connections:
+
+```
+: heartbeat
+
+```
+
+Heartbeats are SSE comments (lines starting with `:`) and are invisible to spec-compliant parsers. They simply prevent read timeouts on healthy connections.
+
+### Connection Cycling
+
+Connections are automatically cycled every 5 minutes (±20% jitter) to prevent stale connections through proxies and load balancers.
+
+Before closing, the server sends a `disconnecting` event. Clients should reconnect immediately using the `since_id` parameter to avoid missing events.
+
+### Retry Hints
+
+Each SSE event includes a `retry:` field (in milliseconds) that hints reconnection timing:
+
+- **Active** (new events): 100ms
+- **Idle** (backoff max): 500ms
+- **After disconnecting**: 100ms
+
+## SDK Implementation
+
+SDKs should:
+1. Track the last received event ID (`lastEventId`)
+2. Handle `disconnecting` event by reconnecting with `since_id` parameter
+3. Handle `onerror` with exponential backoff
+4. Use `retry:` hint for reconnection timing
+5. Set read timeout to 45s (1.5x the 30s heartbeat interval)
+
+### Example Client (JavaScript)
+
+```javascript
+let lastEventId = null;
+
+function connect(sessionId) {
+  const url = lastEventId
+    ? `/v1/sessions/${sessionId}/sse?since_id=${lastEventId}`
+    : `/v1/sessions/${sessionId}/sse`;
+  
+  const eventSource = new EventSource(url);
+  
+  eventSource.addEventListener('message', (event) => {
+    const data = JSON.parse(event.data);
+    lastEventId = data.id;
+    console.log('Event:', data.type, data);
+  });
+  
+  eventSource.addEventListener('disconnecting', (event) => {
+    const data = JSON.parse(event.data);
+    eventSource.close();
+    setTimeout(() => connect(sessionId), data.retry_ms);
+  });
+  
+  eventSource.addEventListener('error', (error) => {
+    console.error('SSE error:', error);
+    eventSource.close();
+    // Implement exponential backoff
+    setTimeout(() => connect(sessionId), 1000);
+  });
+}
+
+connect('session_id_here');
+```
+
+## Common Event Types
+
+### Input Events
+
+- `input.message` - User message submitted
+
+### Output Events
+
+- `output.message.started` - Agent starts generating response
+- `output.message.delta` - Streaming text update (batched ~100ms)
+- `output.message.completed` - Agent response completed
+
+### Turn Events
+
+- `turn.started` - Turn execution started
+- `turn.completed` - Turn completed successfully
+- `turn.failed` - Turn failed
+- `turn.cancelled` - Turn cancelled by user
+
+### Session Events
+
+- `session.started` - Session execution started
+- `session.activated` - Session became active (turn started)
+- `session.idled` - Session became idle (turn completed, includes token usage)
+
+### Atom Events
+
+- `reason.started` / `reason.completed` - LLM reasoning phase
+- `act.started` / `act.completed` - Tool execution batch
+- `tool.started` / `tool.completed` - Individual tool execution
+
+### LLM Events
+
+- `llm.generation` - Full LLM API call with messages and response
+
+### Extended Thinking Events
+
+- `reason.thinking.started` - Extended thinking started
+- `reason.thinking.delta` - Streaming reasoning content
+- `reason.thinking.completed` - Extended thinking completed
+
+See [List Events](/api/events/list) for the JSON-based event listing endpoint.

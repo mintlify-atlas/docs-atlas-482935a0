@@ -1,0 +1,261 @@
+---
+title: Harnesses
+description: Top-level configuration that defines infrastructure and base behavior for agent sessions
+---
+
+A **Harness** is the top-level entity in Everruns that represents the execution environment for agent sessions. It defines infrastructure defaults, base behavior, and constraints under which sessions run.
+
+## Concept
+
+Harnesses are **configuration containers** that establish:
+
+- Base system prompt (forms the foundation of the prompt stack)
+- Default capabilities available to all sessions
+- Default LLM model (lowest priority in resolution chain)
+- Infrastructure constraints and execution environment
+
+Every session must have exactly one harness assigned at creation time. The harness cannot be changed during the session's lifetime.
+
+<Note>
+Think of a harness as the "operating environment" — it defines what's possible, while agents define what to do within those constraints.
+</Note>
+
+## Harness vs Agent
+
+The distinction between harnesses and agents is intentional:
+
+| Aspect | Harness | Agent |
+|--------|---------|-------|
+| **Purpose** | Infrastructure & base rules | Domain-specific behavior |
+| **System Prompt** | Foundation layer | Customization layer |
+| **Capabilities** | Base tooling | Specialized tools |
+| **Model** | Fallback default | Preferred model |
+| **Required** | Yes (every session) | No (optional) |
+| **Can Change** | No (set at creation) | Yes (switchable) |
+
+### Example Scenario
+
+You might have:
+
+- **Harness: "Production"** — Provides file system, bash, web fetch capabilities. Generic system prompt about being helpful.
+- **Agent: "Code Reviewer"** — Specializes in reviewing pull requests, checking code quality, suggesting improvements.
+- **Agent: "Bug Investigator"** — Specializes in debugging, analyzing stack traces, proposing fixes.
+
+Both agents run in the "Production" harness, inheriting its capabilities and base behavior, but each brings its own specialized focus.
+
+## Built-in Harness Types
+
+Everruns includes two built-in harness types:
+
+### Base Harness
+
+**ID:** `base` (system-managed, cannot be modified)
+
+Minimal harness with no capabilities and a generic system prompt:
+
+```
+You are a helpful assistant.
+```
+
+**Use cases:**
+- Testing custom capability combinations
+- Building completely custom agent behaviors
+- Minimal overhead for specialized tasks
+
+### Generic Harness
+
+**ID:** `generic` (system-managed, cannot be modified)
+
+Full-featured harness with comprehensive capabilities:
+
+- `session_file_system` — File operations in `/workspace`
+- `virtual_bash` — Sandboxed shell execution
+- `web_fetch` — HTTP requests and HTML conversion
+- `session_storage` — Key/value and encrypted secrets
+- `stateless_todo_list` — Task tracking
+- `current_time` — Time/date utilities
+
+**System Prompt:** Comprehensive guidelines for helpful, professional assistance.
+
+**Use cases:**
+- General-purpose agent development
+- Most production deployments
+- Default choice for new agents
+
+<Tip>
+The Generic harness is recommended for most use cases. Start here unless you have specific requirements.
+</Tip>
+
+## Harness Configuration
+
+### Data Model
+
+See `crates/core/src/harness.rs` for the full type definition.
+
+```rust
+pub struct Harness {
+    pub id: HarnessId,              // Format: harness_{32-hex}
+    pub name: String,
+    pub description: Option<String>,
+    pub system_prompt: String,
+    pub default_model_id: Option<ModelId>,
+    pub capabilities: Vec<AgentCapabilityConfig>,
+    pub status: HarnessStatus,      // active | archived
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+```
+
+### Capabilities
+
+Harnesses can enable capabilities with optional per-harness configuration:
+
+```json
+{
+  "capabilities": [
+    { "ref": "session_file_system" },
+    { "ref": "web_fetch", "config": { "timeout_ms": 30000 } }
+  ]
+}
+```
+
+Capabilities are applied in array order. See the [Capabilities](/concepts/capabilities) page for details.
+
+### Model Resolution
+
+Harness model is the **lowest priority** in the resolution chain:
+
+```
+Message Controls > Session Model > Agent Model > Harness Model > System Default
+```
+
+This allows fine-grained overrides while providing sensible defaults.
+
+## RuntimeAgent Assembly
+
+At session execution time, the harness configuration merges into a RuntimeAgent:
+
+```rust
+let runtime_agent = RuntimeAgentBuilder::new()
+    .with_harness(&harness, &capability_registry, system_prompt_context).await?
+    .with_agent(&agent, &capability_registry, system_prompt_context).await?
+    .with_capabilities(&session.capabilities, &capability_registry, system_prompt_context).await?
+    .build();
+```
+
+### Prompt Composition
+
+The final system prompt is assembled in this order:
+
+1. Harness system prompt (base layer)
+2. Harness capability prompts (prepended)
+3. Agent system prompt (prepended)
+4. Agent capability prompts (prepended)
+5. Session capability prompts (prepended, highest priority)
+
+Each section is wrapped in XML tags:
+
+```xml
+<capability id="web_fetch">
+  Capability instructions...
+</capability>
+
+<system-prompt>
+  Agent or harness base prompt...
+</system-prompt>
+```
+
+<Accordion title="Example Assembled Prompt">
+```
+<capability id="stateless_todo_list">
+Use the write_todos tool to track progress on complex tasks...
+</capability>
+
+<capability id="web_fetch">
+Fetch content from URLs using the web_fetch tool...
+</capability>
+
+<system-prompt>
+You are a helpful assistant focused on being concise and accurate.
+</system-prompt>
+```
+</Accordion>
+
+## Lifecycle
+
+### Status States
+
+- **Active** — Harness is available for creating new sessions
+- **Archived** — Soft-deleted, hidden from listings, cannot be used for new sessions
+
+Archived harnesses do not affect existing sessions — they continue to run normally.
+
+### Creating Custom Harnesses
+
+```bash
+POST /v1/harnesses
+```
+
+```json
+{
+  "name": "Production Environment",
+  "description": "Full capabilities for production agents",
+  "system_prompt": "You are a professional assistant...",
+  "capabilities": [
+    { "ref": "session_file_system" },
+    { "ref": "virtual_bash" },
+    { "ref": "web_fetch" }
+  ],
+  "default_model_id": "model_01933b5a00007000800000000000001"
+}
+```
+
+<Note>
+Built-in harnesses (`base` and `generic`) cannot be modified or deleted. Create custom harnesses for specialized needs.
+</Note>
+
+## Best Practices
+
+### Harness Design
+
+1. **Keep it generic** — Harnesses should define infrastructure, not behavior
+2. **Enable base tools** — Include capabilities most agents will need
+3. **Set conservative defaults** — Model, timeouts, resource limits
+4. **Document constraints** — Explain what the harness provides in the description
+
+### Capability Selection
+
+1. **Security first** — Only enable capabilities sessions will actually use
+2. **Dependency awareness** — Understand capability dependencies (e.g., `virtual_bash` requires `session_file_system`)
+3. **Risk assessment** — High-risk capabilities (bash, docker) should be justified
+
+### Naming Conventions
+
+- **Environment-based** — "Development", "Staging", "Production"
+- **Purpose-based** — "Code Analysis", "Data Processing", "Customer Support"
+- **Constraint-based** — "Restricted", "Full Access", "Read-only"
+
+## Multi-Instance Deployment
+
+Harnesses work seamlessly across multiple control-plane instances:
+
+- Configuration stored in PostgreSQL (shared state)
+- No special consideration needed for load balancing
+- Session-to-harness mapping is stable across instances
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Agents" icon="robot" href="/concepts/agents">
+    Learn about agent configuration
+  </Card>
+  <Card title="Capabilities" icon="puzzle-piece" href="/concepts/capabilities">
+    Explore available capabilities
+  </Card>
+  <Card title="Sessions" icon="comments" href="/concepts/sessions">
+    Understand session execution
+  </Card>
+  <Card title="Create Harness" icon="plus" href="/api-reference/harnesses/create">
+    API reference for creating harnesses
+  </Card>
+</CardGroup>

@@ -1,80 +1,227 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Get Everruns running with Docker Compose in 5 minutes
 ---
 
-## Get started in three steps
+Get Everruns up and running with Docker Compose, create your first agent, and send a message.
 
-Get your documentation site running locally and make your first customization.
+## Prerequisites
 
-### Step 1: Set up your local environment
+- Docker and Docker Compose installed
+- Python 3 (for encryption key generation)
+- curl (for API requests)
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
+## Deploy with Docker Compose
+
+<Steps>
+  <Step title="Download Docker Compose file">
+    Create a directory and download the production-ready compose configuration:
     
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
+    ```bash
+    mkdir everruns && cd everruns
+    curl -o docker-compose.yaml https://raw.githubusercontent.com/everruns/everruns/main/examples/docker-compose-full.yaml
+    ```
+  </Step>
+
+  <Step title="Generate encryption key">
+    Generate a secure encryption key for storing secrets:
     
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
+    ```bash
+    python3 -c "import os, base64; print('kek-v1:' + base64.b64encode(os.urandom(32)).decode())"
+    ```
     
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    Copy the output (starts with `kek-v1:`).
+  </Step>
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+  <Step title="Create environment file">
+    Create a `.env` file with your encryption key:
+    
+    ```bash
+    echo "SECRETS_ENCRYPTION_KEY=kek-v1:<your-key>" > .env
+    ```
+    
+    Replace `<your-key>` with the key from step 2.
+  </Step>
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+  <Step title="Start services">
+    Launch all services (PostgreSQL, Server, Workers, UI):
+    
+    ```bash
+    docker compose up -d
+    ```
+    
+    This starts:
+    - PostgreSQL database (port 5432)
+    - Everruns server (port 9300)
+    - 3 worker instances
+    - Web UI (port 9300)
+  </Step>
 
-### Step 3: Go live
+  <Step title="Verify deployment">
+    Check that services are running:
+    
+    ```bash
+    docker compose ps
+    curl http://localhost:9300/health
+    ```
+    
+    You should see all services as "Up" and the health endpoint returning `{"status":"ok"}`.
+  </Step>
+</Steps>
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
-
-## Next steps
-
-Now that you have your docs running, explore these key features:
+## Access the Platform
 
 <CardGroup cols={2}>
+  <Card title="Web UI" icon="window" href="http://localhost:9300">
+    Management dashboard at http://localhost:9300
+  </Card>
+  <Card title="API" icon="code" href="http://localhost:9300/api/v1">
+    REST API at http://localhost:9300/api/v1
+  </Card>
+</CardGroup>
 
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
+## Create Your First Agent
 
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
+Use the API to create an agent with capabilities:
 
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
+```bash
+curl -X POST http://localhost:9300/v1/agents \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Assistant",
+    "system_prompt": "You are a helpful assistant with access to web search and file management.",
+    "capabilities": [
+      "current_time",
+      "web_fetch",
+      "session_file_system"
+    ]
+  }'
+```
 
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
+**Response:**
+```json
+{
+  "id": "01933b5a-0000-7000-8000-000000000001",
+  "name": "Assistant",
+  "system_prompt": "You are a helpful assistant with access to web search and file management.",
+  "capabilities": ["current_time", "web_fetch", "session_file_system"],
+  "status": "active",
+  "created_at": "2024-01-15T10:30:00Z"
+}
+```
 
+Save the `id` field - you'll need it to create a session.
+
+## Create a Session
+
+Sessions are where conversations happen. Create one with your agent:
+
+```bash
+curl -X POST http://localhost:9300/v1/sessions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent_id": "01933b5a-0000-7000-8000-000000000001"
+  }'
+```
+
+**Response:**
+```json
+{
+  "id": "01933b5a-0000-7000-8000-000000000100",
+  "agent_id": "01933b5a-0000-7000-8000-000000000001",
+  "status": "idle",
+  "created_at": "2024-01-15T10:31:00Z"
+}
+```
+
+Save the session `id` for sending messages.
+
+## Send a Message
+
+Send your first message to the agent:
+
+```bash
+curl -X POST http://localhost:9300/v1/sessions/01933b5a-0000-7000-8000-000000000100/messages \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": {
+      "content": [
+        {"type": "text", "text": "What is the current time?"}
+      ]
+    }
+  }'
+```
+
+This triggers the agent to process your message and generate a response.
+
+## Stream Events
+
+Watch the agent's response in real-time using Server-Sent Events (SSE):
+
+```bash
+curl -N http://localhost:9300/v1/sessions/01933b5a-0000-7000-8000-000000000100/sse
+```
+
+You'll see events like:
+- `turn.started` - Agent begins processing
+- `tool.started` - Agent calls the `get_current_time` tool
+- `tool.completed` - Tool execution finishes
+- `llm.generation` - LLM generates response
+- `output.message.completed` - Final response ready
+- `turn.completed` - Processing complete
+
+## View Message History
+
+Retrieve the conversation:
+
+```bash
+curl http://localhost:9300/v1/sessions/01933b5a-0000-7000-8000-000000000100/messages
+```
+
+**Response:**
+```json
+{
+  "data": [
+    {
+      "role": "user",
+      "content": [{"type": "text", "text": "What is the current time?"}]
+    },
+    {
+      "role": "tool_result",
+      "content": [{
+        "type": "tool_result",
+        "tool_call_id": "...",
+        "result": "2024-01-15T10:32:00Z"
+      }]
+    },
+    {
+      "role": "agent",
+      "content": [{
+        "type": "text",
+        "text": "The current time is January 15, 2024 at 10:32 AM UTC."
+      }]
+    }
+  ]
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Core Concepts" icon="book" href="/concepts/overview">
+    Learn about agents, sessions, and capabilities
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/overview">
+    Explore all API endpoints
+  </Card>
+  <Card title="Capabilities" icon="puzzle-piece" href="/concepts/capabilities">
+    Discover available capabilities
+  </Card>
+  <Card title="Installation Guide" icon="server" href="/installation">
+    Production deployment and configuration
+  </Card>
 </CardGroup>
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+  This quickstart uses anonymous authentication mode (no login required). For production deployments, see the [Authentication Guide](/deployment/authentication) to configure user accounts and OAuth.
 </Note>

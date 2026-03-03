@@ -1,0 +1,88 @@
+---
+title: "Installation"
+description: "Install the Everruns TypeScript SDK"
+---
+
+## Install the SDK
+
+The Everruns TypeScript SDK provides a type-safe interface to interact with the Everruns API.
+
+<CodeGroup>
+
+```bash npm
+npm install everruns-sdk
+```
+
+```bash yarn
+yarn add everruns-sdk
+```
+
+```bash pnpm
+pnpm add everruns-sdk
+```
+
+</CodeGroup>
+
+## Requirements
+
+- Node.js 16 or higher
+- TypeScript 4.5 or higher (optional, but recommended)
+
+## Initialize the client
+
+Create a client instance with your Everruns server URL:
+
+```typescript
+import { EverrunsClient } from 'everruns-sdk';
+
+const client = new EverrunsClient({
+  baseUrl: 'http://localhost:9300',
+});
+```
+
+### Configuration options
+
+| Option | Type | Required | Description |
+|--------|------|----------|-------------|
+| `baseUrl` | string | Yes | Everruns server URL |
+| `apiKey` | string | No | API key for authentication (if enabled) |
+| `timeout` | number | No | Request timeout in milliseconds (default: 60000) |
+
+### With authentication
+
+If your Everruns server requires authentication, provide an API key:
+
+```typescript
+const client = new EverrunsClient({
+  baseUrl: 'https://api.example.com',
+  apiKey: process.env.EVERRUNS_API_KEY,
+});
+```
+
+<Warning>
+Never hardcode API keys in your source code. Use environment variables or a secure configuration management system.
+</Warning>
+
+## Verify connection
+
+Test your connection with a health check:
+
+```typescript
+const health = await client.health();
+console.log('Server version:', health.version);
+console.log('Runner mode:', health.runner_mode);
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+
+<Card title="Quickstart" icon="rocket" href="/sdk/quickstart">
+  Build your first agent application in minutes
+</Card>
+
+<Card title="Working with Agents" icon="robot" href="/sdk/agents">
+  Create and manage AI agents
+</Card>
+
+</CardGroup>

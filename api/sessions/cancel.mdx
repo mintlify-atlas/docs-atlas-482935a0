@@ -1,0 +1,59 @@
+---
+title: Cancel Turn
+description: Cancel the currently executing turn in a session
+---
+
+## POST /v1/sessions/{session_id}/cancel
+
+Cancels the currently executing turn in a session. This stops the workflow execution and emits appropriate events.
+
+## Path Parameters
+
+<ParamField path="session_id" type="string" required>
+  The ID of the session to cancel. Must be a valid session ID with the `session_` prefix.
+</ParamField>
+
+## Request Body
+
+No request body required.
+
+## Response
+
+Returns `200 OK` on success.
+
+## Error Responses
+
+- `400 Bad Request` - Session is not currently active (no turn to cancel)
+- `404 Not Found` - Session does not exist or is not accessible
+- `401 Unauthorized` - Missing or invalid authentication
+
+## Events Emitted
+
+When a turn is successfully cancelled, the following events are emitted in order:
+
+1. **`turn.cancelled`** - Emitted immediately when cancel is requested
+2. **`input.message`** - User message: "User requested to cancel the work."
+3. **`output.message.completed`** - Agent message: "Work was cancelled by user." (emitted by worker when it stops)
+4. **`session.idled`** - Emitted when the session transitions to idle (emitted by worker)
+
+The user message is emitted immediately by the API, while the agent message and `session.idled` events are emitted by the worker after it detects the cancellation and stops execution. This ensures the agent message appears after any in-flight events.
+
+## Example
+
+```bash
+curl -X POST https://api.everruns.com/v1/sessions/session_01234567-89ab-cdef-0123-456789abcdef/cancel \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+## Use Cases
+
+- Stop a long-running task that's no longer needed
+- Interrupt an agent that's stuck or taking too long
+- Cancel execution before it completes naturally
+
+## Notes
+
+- This endpoint only works when the session status is `active`
+- Calling cancel on an `idle` session returns `400 Bad Request`
+- The cancellation is graceful: in-flight events are processed before stopping
+- After cancellation, the session returns to `idle` status and can accept new messages

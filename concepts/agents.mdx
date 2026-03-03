@@ -1,0 +1,337 @@
+---
+title: Agents
+description: Domain-specific configuration for the agentic loop with system prompts, models, and capabilities
+---
+
+An **Agent** is a domain-specific or task-specific configuration that defines how the agentic loop behaves. Agents are optional — sessions can run with just a harness — but they enable specialized behavior on top of the base infrastructure.
+
+## Concept
+
+Agents are **configuration containers** that define:
+
+- System prompt (behavior and personality)
+- Default LLM model (preferred over harness default)
+- Enabled capabilities (additive to harness capabilities)
+- Metadata (name, description, tags)
+
+Agents can be assigned to sessions at creation time and changed during the session's lifetime, enabling dynamic behavior switching.
+
+<Note>
+Agents are **not** running processes or state machines — they're configuration that gets merged into a RuntimeAgent at execution time.
+</Note>
+
+## Agent vs Harness
+
+The key distinction:
+
+- **Harness** — "What infrastructure and base tools are available?"
+- **Agent** — "How should I behave and what should I focus on?"
+
+### Example
+
+**Harness: Generic**
+```
+Provides: file_system, bash, web_fetch
+Prompt: "You are a helpful assistant."
+```
+
+**Agent: Code Reviewer**
+```
+Adds: stateless_todo_list (for tracking review items)
+Prompt: "You are an expert code reviewer. Focus on:
+- Code quality and maintainability
+- Security vulnerabilities
+- Performance issues
+- Best practices for the detected language"
+```
+
+The session inherits all harness capabilities plus the agent's additions, and the agent's prompt is prepended to the harness prompt.
+
+## Agent Configuration
+
+### Data Model
+
+See `crates/core/src/agent.rs` for the full type definition.
+
+```rust
+pub struct Agent {
+    pub public_id: AgentId,         // Format: agent_{32-hex}
+    pub name: String,
+    pub description: Option<String>,
+    pub system_prompt: String,
+    pub default_model_id: Option<ModelId>,
+    pub capabilities: Vec<AgentCapabilityConfig>,
+    pub status: AgentStatus,        // active | archived
+    pub tags: Vec<String>,
+    pub total_token_usage: TokenUsage,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+```
+
+### Creating an Agent
+
+```bash
+POST /v1/agents
+```
+
+```json
+{
+  "name": "Bug Investigator",
+  "description": "Analyzes stack traces and debugs issues",
+  "system_prompt": "You are an expert debugger. When investigating bugs:\n\n1. Analyze the stack trace carefully\n2. Identify the root cause\n3. Propose fixes with code examples\n4. Consider edge cases",
+  "capabilities": [
+    { "ref": "stateless_todo_list" },
+    { "ref": "web_fetch" }
+  ],
+  "default_model_id": "model_01933b5a00007000800000000000001",
+  "tags": ["debugging", "code-quality"]
+}
+```
+
+### Capabilities
+
+Agents specify capabilities as an ordered array:
+
+```json
+{
+  "capabilities": [
+    { "ref": "session_file_system" },
+    { "ref": "web_fetch", "config": { "timeout_ms": 45000 } },
+    { "ref": "mcp:01933b5a-0000-7000-8000-000000000501" }
+  ]
+}
+```
+
+Capability order matters — earlier capabilities appear first in the system prompt.
+
+<Accordion title="Capability Resolution Process">
+1. **Load agent capabilities** — Fetch from `agent_capabilities` table by position
+2. **Resolve dependencies** — Recursively add required capabilities (e.g., `virtual_bash` → `session_file_system`)
+3. **Deduplicate** — Each capability appears once (first occurrence wins for config)
+4. **Collect tools** — Merge tool definitions from all capabilities
+5. **Build prompt** — Prepend capability system prompts in order
+6. **Add session capabilities** — Session-level capabilities are applied last (highest priority)
+</Accordion>
+
+## RuntimeAgent Assembly
+
+At execution time, the agent configuration merges with the harness to create a RuntimeAgent:
+
+```rust
+// In everruns-core/src/runtime_agent.rs
+let runtime_agent = RuntimeAgentBuilder::new()
+    .with_harness(&harness, &registry, ctx).await?
+    .with_agent(&agent, &registry, ctx).await?  // Optional
+    .build();
+```
+
+### Prompt Layering
+
+The final system prompt follows this hierarchy (bottom-up):
+
+```
+┌──────────────────────────────────┐
+│  Session Capabilities            │  ← Highest priority
+├──────────────────────────────────┤
+│  Agent Capabilities              │
+├──────────────────────────────────┤
+│  Agent System Prompt             │
+├──────────────────────────────────┤
+│  Harness Capabilities            │
+├──────────────────────────────────┤
+│  Harness System Prompt           │  ← Base layer
+└──────────────────────────────────┘
+```
+
+Each section is wrapped in XML tags for clear boundaries:
+
+```xml
+<capability id="stateless_todo_list">
+Use write_todos to track multi-step tasks...
+</capability>
+
+<system-prompt>
+You are an expert code reviewer...
+</system-prompt>
+
+<capability id="session_file_system">
+Access files using read_file, write_file...
+</capability>
+
+<system-prompt>
+You are a helpful assistant.
+</system-prompt>
+```
+
+### Tool Merging
+
+Tools from all capabilities are merged into a flat list:
+
+```json
+[
+  {"name": "read_file", "description": "..."},
+  {"name": "write_file", "description": "..."},
+  {"name": "bash", "description": "..."},
+  {"name": "web_fetch", "description": "..."},
+  {"name": "write_todos", "description": "..."}
+]
+```
+
+MCP tools are prefixed: `mcp_{server}__{tool_name}`.
+
+## Model Resolution
+
+Agent model has higher priority than harness model:
+
+```
+Message Controls > Session Model > Agent Model > Harness Model > System Default
+```
+
+Example resolution:
+
+```json
+// Harness: default_model_id = "gpt-4o"
+// Agent: default_model_id = "claude-sonnet-4"
+// Session: model_id = null
+// → Uses "claude-sonnet-4"
+
+// If session: model_id = "gpt-5.2"
+// → Uses "gpt-5.2" (session override)
+```
+
+## Lifecycle
+
+### Status States
+
+- **Active** — Agent is available for assignment to sessions
+- **Archived** — Soft-deleted, hidden from listings
+
+Archiving an agent does **not** affect existing sessions using it — they continue with the agent configuration as it was at assignment time.
+
+### Changing Agents
+
+Sessions can switch agents during execution:
+
+```bash
+PATCH /v1/sessions/{session_id}
+```
+
+```json
+{
+  "agent_id": "agent_01933b5a00007000800000000000002"
+}
+```
+
+The next turn will use the new agent's configuration:
+
+- New system prompt
+- New capabilities
+- New model (if specified)
+
+<Note>
+Previous turns are unaffected — only future turns use the new agent configuration.
+</Note>
+
+## Token Usage Tracking
+
+Agents automatically track cumulative token usage across all sessions:
+
+```json
+{
+  "id": "agent_01933b5a00007000800000000000001",
+  "name": "Code Reviewer",
+  "total_token_usage": {
+    "prompt_tokens": 125430,
+    "completion_tokens": 48920,
+    "total_tokens": 174350
+  }
+}
+```
+
+This helps monitor agent costs and resource usage.
+
+## Best Practices
+
+### System Prompt Design
+
+1. **Be specific** — Define the agent's expertise and focus area
+2. **Include examples** — Show expected behavior patterns
+3. **Set boundaries** — Explain what the agent should and shouldn't do
+4. **Use structure** — Numbered lists, bullet points, sections
+
+<Accordion title="Good System Prompt Example">
+```
+You are an expert Python code reviewer specializing in data science projects.
+
+When reviewing code:
+
+1. **Correctness** — Verify logic, edge cases, error handling
+2. **Performance** — Identify bottlenecks, suggest optimizations
+3. **Maintainability** — Check naming, documentation, structure
+4. **Security** — Flag potential vulnerabilities
+
+Always:
+- Provide code examples for suggested changes
+- Explain the reasoning behind recommendations
+- Prioritize issues by severity
+
+Never:
+- Make style-only comments without substance
+- Suggest changes without explaining why
+```
+</Accordion>
+
+### Capability Selection
+
+1. **Minimal set** — Only enable capabilities the agent needs
+2. **Dependency awareness** — Some capabilities auto-include dependencies
+3. **Risk assessment** — High-risk capabilities require admin role (TM-AGENT-005)
+
+### Tagging Strategy
+
+```json
+{
+  "tags": [
+    "domain:code-review",
+    "language:python",
+    "team:platform"
+  ]
+}
+```
+
+Use prefixes for categorization:
+
+- `domain:` — Functional area
+- `language:` — Programming language
+- `team:` — Owning team
+- `env:` — Environment (dev, prod)
+
+## High-Risk Capabilities
+
+Assigning high-risk capabilities requires `OrgRole::Admin`:
+
+- `virtual_bash` — Arbitrary command execution
+- `web_fetch` — External network access
+- `docker_container` — Container management
+- `daytona` — Cloud sandbox access
+- `codesandbox` — Cloud VM access
+
+See `specs/threat-model.md` (TM-AGENT-005) for details.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Capabilities" icon="puzzle-piece" href="/concepts/capabilities">
+    Explore the capability system
+  </Card>
+  <Card title="Sessions" icon="comments" href="/concepts/sessions">
+    Learn about session execution
+  </Card>
+  <Card title="Create Agent" icon="plus" href="/api-reference/agents/create">
+    API reference for creating agents
+  </Card>
+  <Card title="Harnesses" icon="layer-group" href="/concepts/harnesses">
+    Understand harness configuration
+  </Card>
+</CardGroup>

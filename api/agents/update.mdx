@@ -1,0 +1,150 @@
+---
+title: Update Agent
+description: Update an existing agent's configuration
+---
+
+## PATCH /v1/agents/{id}
+
+Update one or more fields of an existing agent. Only provided fields will be updated (partial update).
+
+### Path Parameters
+
+<ParamField path="id" type="string" required>
+  UUID of the agent to update
+</ParamField>
+
+### Request Body
+
+All fields are optional. Only include fields you want to update.
+
+<ParamField path="name" type="string">
+  Update agent name. Maximum 2 KB.
+</ParamField>
+
+<ParamField path="system_prompt" type="string">
+  Update base system prompt. Maximum 1 MB.
+</ParamField>
+
+<ParamField path="description" type="string">
+  Update description. Maximum 10 KB.
+</ParamField>
+
+<ParamField path="default_model_id" type="string">
+  Update default model UUID. Set to `null` to remove model override.
+</ParamField>
+
+<ParamField path="capabilities" type="array">
+  Replace capabilities list. Maximum 250 items.
+  
+  <Warning>
+    This field replaces the entire capabilities array. To add a single capability, you must include all existing capabilities plus the new one.
+  </Warning>
+</ParamField>
+
+### Response
+
+Returns the updated agent object with all fields.
+
+<ResponseField name="id" type="string">
+  UUID of the agent (unchanged)
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Updated agent name
+</ResponseField>
+
+<ResponseField name="system_prompt" type="string">
+  Updated system prompt
+</ResponseField>
+
+<ResponseField name="description" type="string">
+  Updated description
+</ResponseField>
+
+<ResponseField name="default_model_id" type="string">
+  Updated default model UUID
+</ResponseField>
+
+<ResponseField name="capabilities" type="array">
+  Updated capabilities array
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Agent status (unchanged by PATCH)
+</ResponseField>
+
+<ResponseField name="created_at" type="string">
+  Original creation timestamp
+</ResponseField>
+
+<ResponseField name="updated_at" type="string">
+  New update timestamp
+</ResponseField>
+
+### Example: Update Name and Description
+
+```bash
+curl -X PATCH http://localhost:9300/v1/agents/01933b5a-0000-7000-8000-000000000001 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Advanced Research Assistant",
+    "description": "Enhanced research agent with additional capabilities"
+  }'
+```
+
+### Example: Add Capability
+
+```bash
+curl -X PATCH http://localhost:9300/v1/agents/01933b5a-0000-7000-8000-000000000001 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "capabilities": [
+      "current_time",
+      "web_fetch",
+      "session_file_system",
+      "stateless_todo_list"
+    ]
+  }'
+```
+
+### Example: Update Model
+
+```bash
+curl -X PATCH http://localhost:9300/v1/agents/01933b5a-0000-7000-8000-000000000001 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "default_model_id": "01933b5a-0000-7000-8000-000000000020"
+  }'
+```
+
+### Example Response
+
+```json
+{
+  "id": "01933b5a-0000-7000-8000-000000000001",
+  "name": "Advanced Research Assistant",
+  "system_prompt": "You are a helpful research assistant.",
+  "description": "Enhanced research agent with additional capabilities",
+  "default_model_id": "01933b5a-0000-7000-8000-000000000020",
+  "capabilities": [
+    "current_time",
+    "web_fetch",
+    "session_file_system",
+    "stateless_todo_list"
+  ],
+  "status": "active",
+  "created_at": "2024-01-15T10:30:00Z",
+  "updated_at": "2024-01-15T11:45:00Z"
+}
+```
+
+<Note>
+  Changes to agent configuration do not affect existing sessions. New sessions created after the update will use the new configuration. To apply changes to existing sessions, you would need to update the session's capabilities separately.
+</Note>
+
+### Error Responses
+
+- `400 Bad Request` - Invalid input or size limits exceeded
+- `404 Not Found` - Agent with specified ID does not exist
+- `422 Unprocessable Entity` - Validation error (invalid capability reference)
+- `500 Internal Server Error` - Server error

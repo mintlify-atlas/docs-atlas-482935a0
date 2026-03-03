@@ -1,0 +1,87 @@
+---
+title: Get Session
+description: Retrieve a specific session by ID
+---
+
+## GET /v1/sessions/{session_id}
+
+Retrieves details for a specific session.
+
+## Path Parameters
+
+<ParamField path="session_id" type="string" required>
+  The ID of the session to retrieve. Must be a valid session ID with the `session_` prefix.
+</ParamField>
+
+## Response
+
+Returns the `Session` object.
+
+<ResponseField name="id" type="string">
+  The session's public ID with the `session_` prefix.
+</ResponseField>
+
+<ResponseField name="agent_id" type="string">
+  The ID of the agent assigned to this session.
+</ResponseField>
+
+<ResponseField name="title" type="string">
+  The session title.
+</ResponseField>
+
+<ResponseField name="tags" type="string[]">
+  Tags associated with the session.
+</ResponseField>
+
+<ResponseField name="model_id" type="string">
+  Model override for this session, if set.
+</ResponseField>
+
+<ResponseField name="capabilities" type="object[]">
+  Session-level capabilities that are **additive** to the agent's capabilities.
+  
+  Each capability object contains:
+  - `ref` (string): Capability reference ID
+  - `config` (object, optional): Configuration overrides for the capability
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Current session status: `started`, `active`, or `idle`.
+  
+  Status transitions:
+  - `started` → Initial state
+  - `active` → Processing a turn
+  - `idle` → Waiting for input
+  
+  Sessions work indefinitely — after processing, status returns to `idle`.
+</ResponseField>
+
+<ResponseField name="features" type="string[]">
+  Computed at read time by aggregating features from all active capabilities (not stored in database).
+</ResponseField>
+
+<ResponseField name="created_at" type="string">
+  ISO 8601 timestamp when the session was created.
+</ResponseField>
+
+<ResponseField name="updated_at" type="string">
+  ISO 8601 timestamp when the session was last updated.
+</ResponseField>
+
+## Example
+
+```bash
+curl https://api.everruns.com/v1/sessions/session_01234567-89ab-cdef-0123-456789abcdef \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+## Error Responses
+
+- `404 Not Found` - Session does not exist or is not accessible
+- `401 Unauthorized` - Missing or invalid authentication
+
+## Notes
+
+- Sessions are top-level entities under organizations
+- The `features` field is computed at read time from active capabilities
+- Session capabilities are additive to the agent's capabilities

@@ -1,0 +1,75 @@
+---
+title: Delete Agent
+description: Archive an agent (soft delete)
+---
+
+## DELETE /v1/agents/{id}
+
+Archive an agent by setting its status to `archived`. This is a soft delete - the agent data is preserved but marked as archived.
+
+### Path Parameters
+
+<ParamField path="id" type="string" required>
+  UUID of the agent to archive
+</ParamField>
+
+### Response
+
+Returns `204 No Content` on success.
+
+### Example Request
+
+```bash
+curl -X DELETE http://localhost:9300/v1/agents/01933b5a-0000-7000-8000-000000000001
+```
+
+### Example Response
+
+```
+204 No Content
+```
+
+### Behavior
+
+<Note>
+  Archiving an agent:
+  - Sets the agent's `status` field to `archived`
+  - Does **not** delete the agent data
+  - Does **not** affect existing sessions using this agent
+  - Prevents the agent from being selected for new sessions (in UI)
+  - The agent still appears in list responses with `status: "archived"`
+</Note>
+
+### Existing Sessions
+
+Sessions that were created with an archived agent will continue to function normally. The agent configuration is captured at session creation time.
+
+```bash
+# This session continues to work even if the agent is archived
+curl -X POST http://localhost:9300/v1/sessions/01933b5a-0000-7000-8000-000000000100/messages \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": {
+      "content": [{"type": "text", "text": "Hello"}]
+    }
+  }'
+```
+
+### Restoring Archived Agents
+
+To restore an archived agent, use the [PATCH endpoint](/api/agents/update) to set the status back to `active`:
+
+```bash
+curl -X PATCH http://localhost:9300/v1/agents/01933b5a-0000-7000-8000-000000000001 \
+  -H "Content-Type: application/json" \
+  -d '{"status": "active"}'
+```
+
+### Error Responses
+
+- `404 Not Found` - Agent with specified ID does not exist
+- `500 Internal Server Error` - Server error
+
+<Warning>
+  There is currently no hard delete operation. Once created, agent data is permanently retained in the database. This is by design to maintain audit trails and session history.
+</Warning>

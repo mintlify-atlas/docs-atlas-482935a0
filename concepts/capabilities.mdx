@@ -1,0 +1,569 @@
+---
+title: Capabilities
+description: Modular functionality units that extend agent behavior with tools, prompts, and mounts
+---
+
+Capabilities are **modular, reusable configuration units** that extend harness, agent, or session behavior. They provide the building blocks for composing agent functionality without writing code.
+
+## Concept
+
+A capability can contribute:
+
+1. **System prompt additions** — Instructions prepended to the agent's prompt
+2. **Tools** — Functions the agent can invoke during execution
+3. **Mount points** — Files and directories populated in the session filesystem
+
+Capabilities are **composable** — you can enable multiple capabilities on a harness, agent, or session, and they merge cleanly.
+
+<Note>
+Capabilities are resolved at the **service layer** (not inside the agent loop). The loop receives a fully-configured RuntimeAgent with merged prompts and tools.
+</Note>
+
+## Capability Types
+
+### Built-in Capabilities
+
+Implemented in Rust, registered in `CapabilityRegistry`:
+
+- ID format: `snake_case` (e.g., `current_time`, `web_fetch`)
+- Always available (status permitting)
+- No external dependencies
+
+### MCP Capabilities
+
+MCP servers integrated as "virtual capabilities":
+
+- ID format: `mcp:{server_uuid}` (e.g., `mcp:01933b5a-0000-7000-8000-000000000501`)
+- Tools discovered at runtime (cached 24h)
+- Tool names prefixed: `mcp_{server}__{tool_name}`
+- Display "MCP" badge in UI
+
+See `specs/mcp-servers.md` for MCP integration details.
+
+### Skill Capabilities
+
+Registry-stored skills following the agentskills.io format:
+
+- ID format: `skill:{skill_uuid}`
+- Org-wide availability
+- Progressive disclosure (list → activate → use resources)
+
+See `specs/skills-registry.md` for details.
+
+## Capability Data Model
+
+See `crates/core/src/capability_types.rs` for the full type definitions.
+
+```rust
+pub struct Capability {
+    pub id: CapabilityId,           // Built-in: snake_case, MCP: mcp:{uuid}
+    pub name: String,
+    pub description: String,        // Supports GitHub Flavored Markdown
+    pub status: CapabilityStatus,   // available | experimental | deprecated
+    pub icon: Option<String>,
+    pub category: Option<String>,
+    pub is_mcp: bool,
+    pub dependencies: Vec<String>,  // IDs of required capabilities
+    pub features: Vec<String>,      // UI features this capability enables
+    pub risk_level: RiskLevel,      // low | medium | high
+}
+```
+
+### Description Markdown
+
+Capability descriptions support GFM including:
+
+- Basic formatting (`**bold**`, `*italic*`, `` `code` ``)
+- Lists and tables
+- Code blocks with syntax highlighting
+- GitHub-style alerts:
+
+```markdown
+> [!TIP]
+> Optional information to help users succeed.
+
+> [!WARNING]
+> Critical content demanding attention.
+```
+
+### Risk Levels (TM-AGENT-005)
+
+Capabilities declare risk level for security enforcement:
+
+| Level | Description | Enforcement |
+|-------|-------------|-------------|
+| `low` | Default, no special requirements | Any org member |
+| `medium` | Logged but allowed | Any org member |
+| `high` | Arbitrary code execution or external access | Requires `OrgRole::Admin` |
+
+**High-risk built-in capabilities:**
+
+- `virtual_bash` — Arbitrary command execution
+- `web_fetch` — External network requests
+- `docker_container` — Docker container management
+- `daytona` — Cloud sandbox access
+- `codesandbox` — Cloud VM access
+
+## Capability Composition
+
+### Resolution Flow
+
+When a session executes:
+
+1. **Load harness capabilities** — Fetch from harness configuration
+2. **Load agent capabilities** — Fetch from agent configuration (if agent assigned)
+3. **Load session capabilities** — Fetch from session configuration
+4. **Resolve dependencies** — Recursively add required capabilities
+5. **Deduplicate** — Each capability appears once (first config wins)
+6. **Collect tools** — Merge tool definitions from all capabilities
+7. **Build prompt** — Prepend capability prompts in reverse order
+8. **Create RuntimeAgent** — Fully configured agent for execution
+
+See `crates/core/src/capabilities/mod.rs` for `resolve_dependencies()` and `collect_capabilities()`.
+
+### Dependency Resolution
+
+Capabilities can declare dependencies:
+
+```rust
+// virtual_bash depends on session_file_system
+impl Capability for VirtualBash {
+    fn dependencies(&self) -> Vec<CapabilityId> {
+        vec![CapabilityId::new("session_file_system")]
+    }
+}
+```
+
+Dependencies are:
+
+- Resolved depth-first
+- Applied before dependents (topological order)
+- Only user-selected capabilities stored (dependencies resolved at runtime)
+- Circular dependencies detected and rejected
+
+**Example:** Selecting `virtual_bash` automatically includes `session_file_system`.
+
+<Accordion title="Dependency Resolution Rules">
+- Maximum 100 resolved capabilities (prevents resource exhaustion)
+- Circular dependencies return error
+- Unknown capabilities in dependency chain silently skipped
+- Dependencies cannot be removed if required by other selected capabilities
+</Accordion>
+
+### Feature Aggregation
+
+Capabilities declare UI features they contribute:
+
+```rust
+impl Capability for SessionFileSystem {
+    fn features(&self) -> Vec<String> {
+        vec!["file_system".to_string()]
+    }
+}
+```
+
+Features are:
+
+- Collected from all resolved capabilities
+- Deduplicated
+- Exposed in Session DTO as `features` array
+- Used by UI to conditionally render tabs/sections
+
+**Known features:**
+
+| Feature | UI Element | Capabilities |
+|---------|------------|-------------|
+| `file_system` | Workspace tab | `session_file_system`, `virtual_bash`, `sample_data` |
+| `secrets` | Storage tab | `session_storage` |
+| `key_value` | Storage tab | `session_storage` |
+| `schedules` | Schedules tab | `session_schedule` |
+| `sql_database` | *(reserved)* | `session_sql_database` |
+
+## Capability Application
+
+Capabilities are applied in this order:
+
+```
+┌──────────────────────────────────────────┐
+│  1. Harness capabilities (base layer)      │
+├──────────────────────────────────────────┤
+│  2. Agent capabilities (specialization)     │
+├──────────────────────────────────────────┤
+│  3. Session capabilities (temporary)        │  ← Highest priority
+└──────────────────────────────────────────┘
+```
+
+System prompt composition (via prepend pattern):
+
+```xml
+<!-- Session capabilities (prepended last, highest priority) -->
+<capability id="web_fetch">
+  Fetch content from URLs...
+</capability>
+
+<!-- Agent capabilities -->
+<capability id="stateless_todo_list">
+  Track multi-step tasks...
+</capability>
+
+<!-- Harness capabilities -->
+<capability id="session_file_system">
+  Access files in /workspace...
+</capability>
+```
+
+Each section wrapped in XML tags for clear boundaries.
+
+### Mount Points
+
+Capabilities can populate session filesystems with initial files:
+
+```rust
+impl Capability for SampleData {
+    fn mounts(&self) -> Vec<MountPoint> {
+        vec![
+            MountPoint {
+                target_path: "/samples/users.json".to_string(),
+                access: MountAccess::ReadOnly,
+                source: MountSource::InlineFile {
+                    content: include_str!("../../../data/users.json").to_string(),
+                    encoding: FileEncoding::Utf8,
+                },
+            },
+        ]
+    }
+}
+```
+
+Mounts are applied at session creation:
+
+- Files created in `/workspace` (session root)
+- ReadOnly files flagged with `is_readonly = true`
+- Directories created recursively
+
+See `crates/core/src/capability_types.rs` for `MountPoint`, `MountAccess`, and `MountSource`.
+
+## Built-in Capabilities
+
+### session_file_system
+
+**Tools:** `read_file`, `write_file`, `list_directory`, `grep_files`, `delete_file`, `stat_file`
+
+**Features:** `file_system`
+
+Provides access to session-isolated virtual filesystem stored in PostgreSQL.
+
+**Path normalization:** All paths relative to `/workspace`, normalized internally.
+
+**Auto-create parents:** Writing `/a/b/c.txt` creates `/a` and `/a/b` automatically.
+
+<Tip>
+Required by many capabilities (`virtual_bash`, `sample_data`, `skills`).
+</Tip>
+
+### virtual_bash
+
+**Dependencies:** `session_file_system`
+
+**Tools:** `bash` (command, working_dir, timeout)
+
+**Features:** `file_system`
+
+**Risk Level:** `high`
+
+Sandboxed bash execution using [bashkit](https://github.com/everruns/bashkit):
+
+- WASM-like isolation (no system access)
+- Shared filesystem with FileSystem capability
+- Built-in commands (cd, ls, cat, echo, etc.)
+- Resource limits to prevent infinite loops
+
+**SessionFileSystemAdapter** bridges bash file operations to session file store — files written by bash are immediately visible to other tools.
+
+### web_fetch
+
+**Tools:** `web_fetch` (url, method, as_markdown, as_text)
+
+**Risk Level:** `high`
+
+Fetch content from URLs using [fetchkit](https://github.com/everruns/fetchkit):
+
+- HTML to markdown/text conversion (LLM-optimized)
+- Binary content metadata (images, PDFs return metadata + error message)
+- SSRF protection via `DnsPolicy::block_private_ips()`
+- Timeouts: 1s first byte, 30s body (partial content on timeout)
+
+**System prompt:** Uses `fetchkit::TOOL_LLMTXT` constant for comprehensive LLM-optimized documentation.
+
+### session_storage
+
+**Tools:** `kv_store`, `secret_store` (operation: set/get/delete/list)
+
+**Features:** `secrets`, `key_value`
+
+Session-scoped storage:
+
+- **Key/Value** — Plain text (state, preferences, results)
+- **Secrets** — AES-256-GCM encrypted at rest (API keys, tokens)
+
+Upsert semantics — setting existing key overwrites.
+
+**Encryption requirement:** Secrets require `SECRETS_ENCRYPTION_KEY` env var.
+
+### stateless_todo_list
+
+**Tools:** `write_todos` (explanation, todos[])
+
+Stateless task tracking via conversation history:
+
+- Each `write_todos` call receives and returns **complete** todo list
+- LLM remembers todos by reading previous tool calls
+- No separate storage layer needed
+
+**When to use:**
+
+- Complex multi-step tasks (3+ steps)
+- User provides multiple tasks
+- Non-trivial work requiring planning
+
+**Best practices:**
+
+- One task `in_progress` at a time
+- Mark completed immediately
+- Replace entire list each call
+
+### current_time
+
+**Tools:** `get_current_time` (timezone, format)
+
+Time/date utilities with timezone support.
+
+### skills
+
+**Dependencies:** `session_file_system`
+
+**Tools:** `list_skills`, `activate_skill`
+
+Discovery mechanism for VFS-based skills (`/.agents/skills/{name}/SKILL.md`):
+
+1. **Discovery** — `list_skills` scans for SKILL.md files
+2. **Activation** — `activate_skill` loads full instructions
+3. **Resources** — Bundled files accessible via filesystem tools
+
+Complements registry-based skills (`skill:{uuid}`).
+
+See `specs/skills-registry.md` for agentskills.io format.
+
+### platform_management
+
+**Tools:** `manage_harnesses`, `manage_agents`, `manage_sessions`, `session_interact`
+
+Programmatic management of Everruns entities:
+
+- **CRUD operations** — Create, read, update, delete harnesses/agents/sessions
+- **Session interaction** — Send messages, get messages, wait for idle
+- **UI links** — All results include `ui_link` for visual management
+
+**Context-aware:** Requires session context to access `PlatformStore`.
+
+### sample_data
+
+**Dependencies:** `session_file_system`
+
+**Features:** `file_system`
+
+Demonstration capability with sample files:
+
+- `/samples/users.json` (readonly)
+- `/samples/config.yaml` (readonly)
+- `/samples/README.md` (readonly)
+
+## Experimental Capabilities (Dev Only)
+
+### docker_container
+
+**Status:** Experimental (Dev only)
+
+**Tools:** `docker_exec`, `docker_read_file`, `docker_write_file`, `docker_logs`, `docker_stop`
+
+**Risk Level:** `high`
+
+Session-scoped Docker containers (`everruns-{session_id}`):
+
+- Lazily started on first use
+- Persists for session lifetime
+- Isolated between sessions
+
+Integration plugin (`integrations/docker/`) auto-registered via `inventory`.
+
+### codesandbox
+
+**Status:** Experimental (Dev only)
+
+**Dependencies:** `session_storage`
+
+**Tools:** `csb_create_sandbox`, `csb_exec`, `csb_exec_status`, `csb_read_file`, `csb_write_file`, `csb_download_workspace`, `csb_list_sandboxes`, `csb_manage_sandbox`
+
+**Risk Level:** `high`
+
+Cloud-based sandbox VMs via CodeSandbox API:
+
+- Multiple sandboxes per session
+- Two-tier API (Management + Pint)
+- Encrypted state storage (pitcher URL/token in session secrets)
+
+See `specs/codesandbox.md` for details.
+
+## Advanced Features
+
+### Message Filters
+
+Capabilities can contribute filters that modify message retrieval:
+
+```rust
+impl Capability for MyCapability {
+    fn message_filter_provider(&self) -> Option<Box<dyn MessageFilterProvider>> {
+        Some(Box::new(MyFilterProvider))
+    }
+}
+```
+
+Supported filters:
+
+- `TimeRange { from, to }` — Filter by timestamp
+- `EventTypes(Vec<String>)` — Whitelist event types
+- `ToolName(String)` — Filter tool results by name
+- `Search(String)` — Full-text search
+- `ExcludeIds` / `IncludeIds` — ID-based filtering
+- `Custom(Arc<dyn Fn>)` — In-memory predicates
+
+Filters can also inject ephemeral messages (summaries, reminders) without persistence.
+
+See `crates/core/src/message_filter.rs` for filter types.
+
+### Dynamic System Prompts
+
+Capabilities can generate prompts at runtime:
+
+```rust
+impl Capability for AgentInstructions {
+    async fn system_prompt_contribution(
+        &self,
+        ctx: &SystemPromptContext,
+    ) -> Result<String, Error> {
+        // Read AGENTS.md from session filesystem
+        let content = ctx.file_store.read_file(&ctx.session_id, "/.agents/AGENTS.md").await?;
+        Ok(format!("<agent-instructions>\n{}\n</agent-instructions>", content))
+    }
+}
+```
+
+**Use cases:**
+
+- `agent_instructions` — Read project-specific instructions from VFS
+- `skills` — Load activated skill instructions
+
+## API Endpoints
+
+```bash
+# List all capabilities
+GET /v1/capabilities
+
+# Get capability details
+GET /v1/capabilities/{capability_id}
+```
+
+Capabilities are managed via agent/harness/session APIs:
+
+```bash
+# Create agent with capabilities
+POST /v1/agents
+{
+  "capabilities": [
+    { "ref": "session_file_system" },
+    { "ref": "web_fetch", "config": { "timeout_ms": 30000 } }
+  ]
+}
+
+# Update agent capabilities
+PATCH /v1/agents/{agent_id}
+{
+  "capabilities": [...]
+}
+```
+
+## Best Practices
+
+### Capability Selection
+
+1. **Minimal set** — Only enable capabilities you need
+2. **Understand dependencies** — Some capabilities auto-include others
+3. **Risk awareness** — High-risk capabilities require admin role
+4. **Layer appropriately:**
+   - Harness — Base tools everyone needs
+   - Agent — Domain-specific additions
+   - Session — Temporary experiments
+
+### Ordering
+
+Capability order affects system prompt composition:
+
+```json
+{
+  "capabilities": [
+    { "ref": "session_file_system" },  // Mentioned first in prompt
+    { "ref": "web_fetch" },            // Mentioned second
+    { "ref": "stateless_todo_list" }   // Mentioned third
+  ]
+}
+```
+
+Order by importance — most critical capabilities first.
+
+### Configuration
+
+Some capabilities accept per-instance config:
+
+```json
+{
+  "ref": "web_fetch",
+  "config": {
+    "timeout_ms": 45000,
+    "max_redirects": 5
+  }
+}
+```
+
+Config is capability-specific and passed during execution.
+
+## Adding New Capabilities
+
+1. Implement the `Capability` trait (see `crates/core/src/capabilities/mod.rs`)
+2. Register in `CapabilityRegistry::with_builtins()`
+3. Add tool implementations (implement `Tool` trait)
+4. No database migration needed — ID validated at runtime
+
+**For integration plugins** (docker, codesandbox):
+
+1. Create crate under `integrations/`
+2. Add as dependency in `crates/server/Cargo.toml` and `crates/worker/Cargo.toml`
+3. Add `extern crate` to `crates/server/src/lib.rs` and `crates/worker/src/lib.rs`
+
+Without step 3, capabilities silently fail to register (linker optimization).
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Agents" icon="robot" href="/concepts/agents">
+    Learn about agent configuration
+  </Card>
+  <Card title="Sessions" icon="comments" href="/concepts/sessions">
+    Understand session execution
+  </Card>
+  <Card title="MCP Servers" icon="plug" href="/concepts/mcp-servers">
+    Integrate external tools via MCP
+  </Card>
+  <Card title="Capabilities API" icon="code" href="/api-reference/capabilities/list">
+    API reference for capabilities
+  </Card>
+</CardGroup>

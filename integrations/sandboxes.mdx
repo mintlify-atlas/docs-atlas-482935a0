@@ -1,0 +1,438 @@
+---
+title: Sandboxes
+description: Configure Docker, CodeSandbox, and Daytona cloud sandbox environments
+---
+
+Everruns supports multiple sandbox environments for isolated code execution. Choose the sandbox type that fits your deployment and security requirements.
+
+## Overview
+
+Sandbox capabilities provide:
+- **Isolated execution** - Each sandbox is a separate environment
+- **File management** - Read/write files in sandbox filesystem
+- **Command execution** - Run shell commands with output capture
+- **Git integration** - Clone repositories with automatic authentication
+- **Multi-sandbox support** - Multiple sandboxes per session
+
+## Sandbox Types
+
+<Tabs>
+  <Tab title="Daytona">
+    **Status:** Available (all environments)
+
+    **Capability ID:** `daytona`
+
+    **Platform:** Cloud-based sandboxes via [Daytona](https://www.daytona.io/)
+
+    **Features:**
+    - Full Linux environments with network access
+    - Synchronous command execution
+    - Git operations with credential helper
+    - Auto-stop after 5 minutes of inactivity
+    - Workspace download to session storage
+
+    **Setup:**
+    1. Get API key from [Daytona Dashboard](https://app.daytona.io)
+    2. Configure in **Settings > Connections > Daytona**
+    3. Enable `daytona` capability on your agent
+
+    **Tools:**
+    - `daytona_create_sandbox` - Create and start a sandbox
+    - `daytona_exec` - Run shell commands (sync)
+    - `daytona_read_file` / `daytona_write_file` - File operations
+    - `daytona_download_workspace` - Download to session storage
+    - `daytona_list_sandboxes` - List session sandboxes
+    - `daytona_manage_sandbox` - Stop or delete
+    - `daytona_git_clone` - Clone repositories
+    - `daytona_git_credentials` - Configure git for push/pull
+  </Tab>
+
+  <Tab title="CodeSandbox">
+    **Status:** Available (all environments)
+
+    **Capability ID:** `codesandbox`
+
+    **Platform:** Cloud-based Firecracker microVMs via [CodeSandbox](https://codesandbox.io/)
+
+    **Features:**
+    - Isolated Firecracker microVMs
+    - Async and sync command execution
+    - Git clone with authentication
+    - Auto-hibernate after 5 minutes
+    - Workspace download to session storage
+
+    **Setup:**
+    1. Set `CSB_API_KEY` session secret
+    2. Enable `codesandbox` capability on your agent
+
+    **Tools:**
+    - `csb_create_sandbox` - Create sandbox VM
+    - `csb_exec` - Run commands (sync or async via `wait` parameter)
+    - `csb_exec_status` - Poll async execution status
+    - `csb_read_file` / `csb_write_file` - File operations
+    - `csb_download_workspace` - Download to session storage
+    - `csb_list_sandboxes` - List session sandboxes
+    - `csb_manage_sandbox` - Shutdown, hibernate, or delete
+    - `csb_git_clone` - Clone repositories
+  </Tab>
+
+  <Tab title="Docker">
+    **Status:** Experimental (dev-only)
+
+    **Capability ID:** `docker_container`
+
+    **Platform:** Local Docker daemon
+
+    **Features:**
+    - Session-scoped Docker containers
+    - Lazy container start on first use
+    - Named containers: `everruns-{session_id}`
+    - Logs and lifecycle management
+
+    **Setup:**
+    1. Ensure Docker daemon is running
+    2. Enable `docker_container` capability (dev mode only)
+
+    **Tools:**
+    - `docker_exec` - Run commands in container
+    - `docker_read_file` / `docker_write_file` - File operations
+    - `docker_logs` - View container logs
+    - `docker_stop` - Stop and remove container
+
+    <Warning>
+      Docker capability is **experimental** and only available in dev mode (`DeploymentGrade::Dev`).
+    </Warning>
+  </Tab>
+</Tabs>
+
+## Daytona Configuration
+
+### API Key Setup
+
+<Steps>
+  <Step title="Get Daytona API key">
+    1. Sign up at [Daytona](https://app.daytona.io/)
+    2. Navigate to **API Keys**
+    3. Create a new API key
+  </Step>
+
+  <Step title="Configure in Everruns">
+    **Option 1: User Connection (recommended)**
+
+    Navigate to **Settings > Connections > Daytona** and enter your API key.
+
+    ```bash
+    # Via API
+    curl -X POST https://api.everruns.com/v1/user/connections/daytona \
+      -H "Authorization: Bearer YOUR_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d '{"api_key": "your-daytona-key"}'
+    ```
+
+    **Option 2: Session Secret**
+
+    Set `DAYTONA_API_KEY` as a session secret (useful for per-session keys).
+  </Step>
+
+  <Step title="Enable capability">
+    Add `daytona` to your agent's capabilities:
+
+    ```bash
+    curl -X PATCH https://api.everruns.com/v1/agents/{agent_id} \
+      -H "Authorization: Bearer YOUR_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "capabilities": [
+          {"ref": "daytona"},
+          {"ref": "session_storage"}
+        ]
+      }'
+    ```
+
+    Note: `session_storage` is automatically added as a dependency.
+  </Step>
+</Steps>
+
+### Git Authentication
+
+Daytona integrates with GitHub for repository access:
+
+**Clone repositories:**
+```json
+{
+  "tool": "daytona_git_clone",
+  "arguments": {
+    "sandbox_id": "sb-123",
+    "repo_url": "owner/repo",
+    "branch": "main"
+  }
+}
+```
+
+**Authentication flow:**
+1. Resolves GitHub token from user connections
+2. Falls back to `GITHUB_TOKEN` session secret
+3. If token found: authenticates automatically (private repos supported)
+4. If no token: public repos only
+
+**For git push/pull/fetch:**
+```json
+{
+  "tool": "daytona_git_credentials",
+  "arguments": {
+    "sandbox_id": "sb-123"
+  }
+}
+```
+
+This configures a git credential store in the sandbox. After this, all git operations via `daytona_exec` authenticate automatically:
+
+```json
+{
+  "tool": "daytona_exec",
+  "arguments": {
+    "sandbox_id": "sb-123",
+    "command": "git push origin main"
+  }
+}
+```
+
+<Note>
+  GitHub tokens expire in ~1 hour. Call `daytona_git_credentials` again to refresh.
+</Note>
+
+## CodeSandbox Configuration
+
+### API Key Setup
+
+CodeSandbox requires a session-scoped API key:
+
+```bash
+# Set via session secret
+curl -X POST https://api.everruns.com/v1/sessions/{session_id}/storage/secrets \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "CSB_API_KEY",
+    "value": "your-codesandbox-key"
+  }'
+```
+
+### Execution Modes
+
+CodeSandbox supports both sync and async execution:
+
+**Synchronous (wait for completion):**
+```json
+{
+  "tool": "csb_exec",
+  "arguments": {
+    "sandbox_id": "sb-456",
+    "command": "npm test",
+    "wait": true
+  }
+}
+```
+
+**Asynchronous (poll for status):**
+```json
+// Start execution
+{
+  "tool": "csb_exec",
+  "arguments": {
+    "sandbox_id": "sb-456",
+    "command": "npm run build",
+    "wait": false
+  }
+}
+// Returns: {"execution_id": "exec-789"}
+
+// Poll status
+{
+  "tool": "csb_exec_status",
+  "arguments": {
+    "sandbox_id": "sb-456",
+    "execution_id": "exec-789"
+  }
+}
+```
+
+## Docker Configuration
+
+<Warning>
+  Docker capability is **experimental** and only available in development environments.
+</Warning>
+
+### Session-Scoped Containers
+
+Each session gets its own container:
+- **Name:** `everruns-{session_id}`
+- **Lifecycle:** Lazily started on first tool use
+- **Isolation:** Separate container per session
+
+### Container Management
+
+```json
+// Execute command (starts container if needed)
+{
+  "tool": "docker_exec",
+  "arguments": {
+    "command": "python script.py"
+  }
+}
+
+// View logs
+{
+  "tool": "docker_logs",
+  "arguments": {}
+}
+
+// Stop and remove container
+{
+  "tool": "docker_stop",
+  "arguments": {}
+}
+```
+
+## Multi-Sandbox Workflows
+
+Daytona and CodeSandbox support multiple sandboxes per session:
+
+**Use cases:**
+- Frontend + backend in separate sandboxes
+- A/B testing different configurations
+- Parallel test execution
+- Isolated environment per feature
+
+**Example:**
+```json
+// Create frontend sandbox
+{"tool": "daytona_create_sandbox", "arguments": {"title": "Frontend"}}
+// Returns: {"sandbox_id": "sb-frontend"}
+
+// Create backend sandbox
+{"tool": "daytona_create_sandbox", "arguments": {"title": "Backend"}}
+// Returns: {"sandbox_id": "sb-backend"}
+
+// Execute in specific sandbox
+{"tool": "daytona_exec", "arguments": {
+  "sandbox_id": "sb-frontend",
+  "command": "npm start"
+}}
+```
+
+## Workspace Download
+
+Download sandbox files to session storage:
+
+```json
+{
+  "tool": "daytona_download_workspace",
+  "arguments": {
+    "sandbox_id": "sb-123",
+    "sandbox_path": "/workspace",
+    "session_path": "/downloads"
+  }
+}
+```
+
+Files are:
+1. Downloaded from sandbox filesystem
+2. Stored in session storage (persistent)
+3. Accessible via `session_file_system` tools
+
+## Lifecycle Management
+
+### Auto-Stop/Hibernate
+
+**Daytona:**
+- Auto-stops after 5 minutes of inactivity
+- Use `daytona_manage_sandbox` with `action: "delete"` to clean up
+
+**CodeSandbox:**
+- Auto-hibernates after 5 minutes of inactivity
+- Use `csb_manage_sandbox` with `action: "delete"` to clean up
+
+**Docker:**
+- Container persists for session duration
+- Use `docker_stop` to explicitly stop and remove
+
+### Best Practices
+
+<Steps>
+  <Step title="Create sandbox">
+    Create sandbox at the start of your workflow.
+  </Step>
+
+  <Step title="Execute commands">
+    Run commands as needed. Sandboxes stay active.
+  </Step>
+
+  <Step title="Download results">
+    Download workspace to session storage if needed.
+  </Step>
+
+  <Step title="Clean up">
+    **Always delete** sandboxes when done:
+
+    ```json
+    {"tool": "daytona_manage_sandbox", "arguments": {
+      "sandbox_id": "sb-123",
+      "action": "delete"
+    }}
+    ```
+
+    Stopping/hibernating leaves sandboxes on the dashboard.
+  </Step>
+</Steps>
+
+## Security
+
+### API Keys
+
+- **Daytona**: Stored in user connections (encrypted) or session secrets (encrypted)
+- **CodeSandbox**: Stored in session secrets (encrypted)
+- **Encryption**: AES-256-GCM envelope encryption at rest
+- **Never exposed**: API responses show `api_key_set` indicator only
+
+### Sandbox Isolation
+
+- **Per-session state**: Sandbox IDs scoped to session
+- **No cross-session access**: Sandboxes cannot be shared between sessions
+- **Filesystem isolation**: Each sandbox has its own filesystem
+- **Network access**: Full network access (use with caution)
+
+### Git Credentials
+
+Daytona git credentials:
+- Short-lived tokens (~1 hour expiry)
+- Written to `/tmp/.git-credentials` in sandbox
+- Lost on sandbox stop
+- Same trust boundary as exec access (TM-DAYTONA-001, TM-DAYTONA-002)
+
+See [Threat Model](/security/threat-model) for full analysis.
+
+## Pre-configured Agents
+
+Everruns seeds demo agents:
+
+- **Daytona Coder** - Uses `daytona`, `session_storage`, `session_file_system`
+
+## Comparison
+
+| Feature | Daytona | CodeSandbox | Docker |
+|---------|---------|-------------|--------|
+| **Platform** | Cloud | Cloud | Local |
+| **Availability** | All | All | Dev-only |
+| **Execution** | Sync | Sync + Async | Sync |
+| **Multi-sandbox** | Yes | Yes | No |
+| **Git integration** | Full (clone + credentials) | Clone only | Manual |
+| **Auto-stop** | 5 min | 5 min (hibernate) | Manual |
+| **API key** | User connection or secret | Session secret | N/A |
+| **Risk level** | High | High | High |
+
+## Next Steps
+
+- [Create agents](/guides/agents) - Build agents with sandbox capabilities
+- [Session storage](/capabilities/session-storage) - Store sandbox results
+- [User connections](/settings/connections) - Configure Daytona API key

@@ -1,0 +1,510 @@
+---
+title: Adding Capabilities
+description: Enable modular capabilities on agents to extend their functionality
+---
+
+Capabilities are modular features that extend what agents can do. They provide tools, system prompt additions, and documentation. This guide shows how to discover, configure, and enable capabilities on agents.
+
+## Goal
+
+By the end of this guide, you'll know how to:
+- List available capabilities
+- Add capabilities to agents
+- Configure capability-specific options
+- Use session-level capabilities for temporary extensions
+- Understand how capabilities affect agent behavior
+
+## What Are Capabilities?
+
+Capabilities provide:
+
+1. **Tool Groups**: Sets of related tools (e.g., `session_file_system` provides read, write, grep, stat, move, copy tools)
+2. **System Prompt Additions**: Context and instructions prepended to the agent's prompt
+3. **Documentation**: User-facing descriptions of functionality
+
+Capabilities are modular and composable. Agents can have multiple capabilities enabled simultaneously.
+
+## Discovering Capabilities
+
+### List Available Capabilities
+
+<CodeGroup>
+
+```bash cURL
+curl https://app.everruns.com/api/v1/capabilities \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+```python Python SDK
+capabilities = client.capabilities.list()
+
+for cap in capabilities.items:
+    print(f"{cap.id}: {cap.name} - {cap.description}")
+```
+
+```bash CLI
+everruns capabilities
+```
+
+</CodeGroup>
+
+Response:
+
+```json
+{
+  "items": [
+    {
+      "id": "current_time",
+      "name": "Current Time",
+      "description": "Tool to get current date and time",
+      "status": "available",
+      "icon": "clock",
+      "category": "Utilities"
+    },
+    {
+      "id": "web_fetch",
+      "name": "Web Fetch",
+      "description": "Fetch content from URLs",
+      "status": "available",
+      "icon": "globe",
+      "category": "Web"
+    },
+    {
+      "id": "session_file_system",
+      "name": "Session File System",
+      "description": "Read, write, and manage files in session storage",
+      "status": "available",
+      "icon": "folder",
+      "category": "Storage"
+    },
+    {
+      "id": "stateless_todo_list",
+      "name": "Stateless Todo List",
+      "description": "Manage task lists during agent execution",
+      "status": "available",
+      "icon": "check-square",
+      "category": "Productivity"
+    }
+  ],
+  "total": 4
+}
+```
+
+### Filter by Status
+
+```bash
+# Only available capabilities
+curl "https://app.everruns.com/api/v1/capabilities?status=available" \
+  -H "Authorization: Bearer YOUR_API_KEY"
+
+# Coming soon capabilities
+curl "https://app.everruns.com/api/v1/capabilities?status=coming_soon" \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+### Get Capability Details
+
+```bash
+curl https://app.everruns.com/api/v1/capabilities/web_fetch \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+Returns detailed information including available configuration options.
+
+## Adding Capabilities to Agents
+
+### At Agent Creation
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST https://app.everruns.com/api/v1/agents \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Research Assistant",
+    "system_prompt": "You are a thorough research assistant.",
+    "capabilities": ["current_time", "web_fetch", "session_file_system"]
+  }'
+```
+
+```python Python SDK
+agent = client.agents.create(
+    name="Research Assistant",
+    system_prompt="You are a thorough research assistant.",
+    capabilities=["current_time", "web_fetch", "session_file_system"]
+)
+```
+
+```markdown Markdown File
+---
+name: "Research Assistant"
+capabilities:
+  - current_time
+  - web_fetch
+  - session_file_system
+---
+You are a thorough research assistant.
+```
+
+</CodeGroup>
+
+### Updating Existing Agents
+
+Use PATCH to update capabilities:
+
+```bash
+curl -X PATCH https://app.everruns.com/api/v1/agents/agt_01933b5a \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "capabilities": ["current_time", "web_fetch", "session_file_system", "stateless_todo_list"]
+  }'
+```
+
+This **replaces** the entire capabilities list. Include all capabilities you want enabled.
+
+## Configuring Capabilities
+
+Some capabilities accept configuration options:
+
+```json
+{
+  "name": "Data Processor",
+  "system_prompt": "You process and analyze data.",
+  "capabilities": [
+    {
+      "ref": "web_fetch",
+      "config": {
+        "timeout_ms": 30000,
+        "max_redirects": 5
+      }
+    },
+    {
+      "ref": "session_file_system",
+      "config": {
+        "max_file_size_mb": 50
+      }
+    }
+  ]
+}
+```
+
+Configuration options are capability-specific. See the capability documentation for available options.
+
+## Session-Level Capabilities
+
+Add capabilities to a specific session without modifying the agent:
+
+```json
+{
+  "agent_id": "agt_01933b5a",
+  "capabilities": [
+    { "ref": "web_fetch" },
+    { "ref": "session_file_system" }
+  ]
+}
+```
+
+Session capabilities are **additive**:
+1. Agent capabilities are loaded first
+2. Session capabilities are merged in (no duplicates)
+
+This allows:
+- Testing capabilities before adding them to the agent permanently
+- Temporarily extending agents for specific workflows
+- Per-session configuration overrides
+
+<Warning>
+Session capabilities persist for the lifetime of the session. All turns will have access to these capabilities.
+</Warning>
+
+## How Capabilities Affect Agents
+
+### System Prompt Modifications
+
+Capabilities prepend instructions to the agent's system prompt:
+
+```text
+Original agent prompt:
+"You are a helpful assistant."
+
+With current_time capability:
+"## Current Time
+You have access to the get_current_time tool which returns the current date and time in ISO 8601 format. Use this when users ask about the current time or when you need to timestamp actions.
+
+You are a helpful assistant."
+```
+
+Use the preview endpoint to see the merged result:
+
+```bash
+curl -X POST https://app.everruns.com/api/v1/agents/preview \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "system_prompt": "You are a helpful assistant.",
+    "capabilities": [{"ref": "current_time"}, {"ref": "web_fetch"}]
+  }'
+```
+
+### Tool Availability
+
+Capabilities register tools in the LLM's function calling interface:
+
+```json
+{
+  "tools": [
+    {
+      "name": "get_current_time",
+      "description": "Get the current date and time",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    },
+    {
+      "name": "fetch_url",
+      "description": "Fetch content from a URL",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "The URL to fetch"
+          }
+        },
+        "required": ["url"]
+      }
+    }
+  ]
+}
+```
+
+The LLM can call these tools during execution. Tool calls appear in events:
+
+```json
+{
+  "type": "tool.started",
+  "data": {
+    "tool_call": {
+      "id": "call_abc123",
+      "name": "fetch_url",
+      "arguments": {"url": "https://example.com"}
+    }
+  }
+}
+```
+
+## Built-In Capabilities
+
+### current_time
+
+Provides:
+- `get_current_time()` tool
+- Returns ISO 8601 formatted timestamp
+
+Use cases:
+- Timestamping actions
+- Time-based logic
+- Scheduling information
+
+```json
+{"capabilities": ["current_time"]}
+```
+
+### web_fetch
+
+Provides:
+- `fetch_url(url)` tool
+- Fetches HTML/text content from URLs
+- Follows redirects
+- Respects robots.txt
+
+Configuration:
+- `timeout_ms`: Request timeout (default: 30000)
+- `max_redirects`: Maximum redirects to follow (default: 5)
+
+Use cases:
+- Research and information gathering
+- Documentation lookup
+- Web scraping
+
+```json
+{
+  "capabilities": [
+    {
+      "ref": "web_fetch",
+      "config": {"timeout_ms": 60000}
+    }
+  ]
+}
+```
+
+### session_file_system
+
+Provides:
+- `read_file(path)` - Read file content
+- `write_file(path, content)` - Write file
+- `list_directory(path)` - List directory contents
+- `delete_file(path)` - Delete file
+- `move_file(source, dest)` - Move/rename file
+- `copy_file(source, dest)` - Copy file
+- `grep(pattern, path)` - Search file contents
+- `stat(path)` - Get file metadata
+
+Configuration:
+- `max_file_size_mb`: Maximum file size (default: 10)
+
+Use cases:
+- Data analysis workflows
+- Report generation
+- Code review and editing
+- Note-taking and organization
+
+```json
+{
+  "capabilities": [
+    {
+      "ref": "session_file_system",
+      "config": {"max_file_size_mb": 25}
+    }
+  ]
+}
+```
+
+### stateless_todo_list
+
+Provides:
+- `add_todo(task, priority)` - Add task
+- `list_todos()` - List all tasks
+- `complete_todo(task_id)` - Mark complete
+- `delete_todo(task_id)` - Remove task
+
+Use cases:
+- Breaking down complex tasks
+- Tracking multi-step workflows
+- Progress tracking during long operations
+
+```json
+{"capabilities": ["stateless_todo_list"]}
+```
+
+<Warning>
+Todo lists are **stateless** - they exist only during turn execution and are not persisted between turns.
+</Warning>
+
+## Capability Composition Patterns
+
+### Research Agent
+
+```json
+{
+  "name": "Research Agent",
+  "capabilities": [
+    "web_fetch",              // Fetch sources
+    "session_file_system",    // Save notes
+    "stateless_todo_list",    // Track research tasks
+    "current_time"            // Timestamp findings
+  ]
+}
+```
+
+### Code Review Agent
+
+```json
+{
+  "name": "Code Reviewer",
+  "capabilities": [
+    "session_file_system"     // Read code files, write review reports
+  ]
+}
+```
+
+### Customer Support Agent
+
+```json
+{
+  "name": "Support Agent",
+  "capabilities": [
+    "current_time",           // Timestamp interactions
+    "web_fetch"               // Look up documentation
+  ],
+  "client_tools": [           // Custom CRM integration
+    {
+      "type": "client",
+      "name": "lookup_customer",
+      "description": "Look up customer info",
+      "parameters": {...}
+    }
+  ]
+}
+```
+
+### Data Analysis Agent
+
+```json
+{
+  "name": "Data Analyst",
+  "capabilities": [
+    {
+      "ref": "session_file_system",
+      "config": {"max_file_size_mb": 100}  // Large datasets
+    },
+    "stateless_todo_list"     // Track analysis steps
+  ]
+}
+```
+
+## MCP Server Integration
+
+Model Context Protocol (MCP) servers provide dynamic capabilities:
+
+```json
+{
+  "name": "GitHub Agent",
+  "capabilities": [
+    {
+      "ref": "mcp:01933b5a-0000-7000-8000-000000000001"  // GitHub MCP server ID
+    }
+  ]
+}
+```
+
+MCP servers expose tools dynamically. The agent can use tools like:
+- `create_issue()`
+- `list_pull_requests()`
+- `search_code()`
+
+See [MCP Servers documentation](/concepts/mcp-servers) for setup and configuration.
+
+## Common Pitfalls
+
+<Warning>
+**Invalid Capability IDs**: Using a capability ID that doesn't exist will cause agent creation to fail. Always check `GET /v1/capabilities` for the current list.
+</Warning>
+
+<Warning>
+**Duplicate Capabilities**: Adding the same capability multiple times (at agent and session level) is ignored. The capability is only loaded once.
+</Warning>
+
+<Warning>
+**Configuration Validation**: Invalid configuration options for capabilities may fail silently or use defaults. Check capability documentation for required formats.
+</Warning>
+
+<Warning>
+**Tool Name Conflicts**: If multiple capabilities provide tools with the same name, the behavior is undefined. Avoid enabling conflicting capabilities.
+</Warning>
+
+<Warning>
+**Prompt Size Limits**: Capabilities add to the system prompt length. Too many capabilities may exceed model context limits. Use only the capabilities you need.
+</Warning>
+
+## Next Steps
+
+- [Create a session to test capabilities](/guides/managing-sessions)
+- [Stream events to see tool execution](/guides/streaming-events)
+- [Explore MCP server integration](/concepts/mcp-servers)
+- [View all available capabilities](/api-reference/capabilities)
+- [Learn about client-side tools](/concepts/client-side-tools)

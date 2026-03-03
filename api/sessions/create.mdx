@@ -1,0 +1,116 @@
+---
+title: Create Session
+description: Create a new session with an agent assigned to work in it
+---
+
+## POST /v1/sessions
+
+Creates a new session. Sessions are top-level entities under organizations, with an agent assigned to work in each session.
+
+## Request Body
+
+<ParamField body="agent_id" type="string" required>
+  The ID of the agent to assign to this session. Must be a valid agent ID with the `agent_` prefix.
+</ParamField>
+
+<ParamField body="title" type="string">
+  Optional title for the session.
+</ParamField>
+
+<ParamField body="tags" type="string[]">
+  Optional tags for organizing and filtering sessions.
+</ParamField>
+
+<ParamField body="model_id" type="string">
+  Optional model override for this session. When set, this model will be used instead of the agent's default model.
+</ParamField>
+
+<ParamField body="capabilities" type="object[]">
+  Optional session-level capabilities that are **additive** to the agent's capabilities.
+  
+  When building the RuntimeAgent:
+  1. Agent capabilities are applied first
+  2. Session capabilities are applied after (additive)
+  
+  This enables temporarily extending an agent's capabilities for specific sessions without modifying the agent configuration.
+  
+  Each capability object contains:
+  - `ref` (string, required): Capability reference ID (e.g., "current_time", "web_fetch")
+  - `config` (object, optional): Configuration overrides for the capability
+</ParamField>
+
+## Response
+
+Returns the created `Session` object.
+
+<ResponseField name="id" type="string">
+  The session's public ID with the `session_` prefix.
+</ResponseField>
+
+<ResponseField name="agent_id" type="string">
+  The ID of the agent assigned to this session.
+</ResponseField>
+
+<ResponseField name="title" type="string">
+  The session title.
+</ResponseField>
+
+<ResponseField name="tags" type="string[]">
+  Tags associated with the session.
+</ResponseField>
+
+<ResponseField name="model_id" type="string">
+  Model override for this session, if set.
+</ResponseField>
+
+<ResponseField name="capabilities" type="object[]">
+  Session-level capabilities (additive to agent capabilities).
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Current session status: `started`, `active`, or `idle`.
+  
+  Status transitions:
+  - `started` → Initial state
+  - `active` → Processing a turn
+  - `idle` → Waiting for input
+  
+  Sessions work indefinitely — after processing, status returns to `idle`.
+</ResponseField>
+
+<ResponseField name="features" type="string[]">
+  Computed at read time by aggregating features from all active capabilities (not stored).
+</ResponseField>
+
+<ResponseField name="created_at" type="string">
+  ISO 8601 timestamp when the session was created.
+</ResponseField>
+
+<ResponseField name="updated_at" type="string">
+  ISO 8601 timestamp when the session was last updated.
+</ResponseField>
+
+## Example
+
+```bash
+curl -X POST https://api.everruns.com/v1/sessions \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent_id": "agent_01234567-89ab-cdef-0123-456789abcdef",
+    "title": "Research Session",
+    "tags": ["research", "web"],
+    "model_id": "gpt-4o",
+    "capabilities": [
+      { "ref": "current_time" },
+      { "ref": "web_fetch", "config": { "timeout_ms": 30000 } }
+    ]
+  }'
+```
+
+## Notes
+
+- The `agent_id` field is required and must reference a valid agent
+- Session capabilities extend the agent's capabilities without modifying the agent
+- Sessions are direct children of organizations, not agents
+- All entity IDs use the dual-ID pattern (internal UUID PK + external public_id)

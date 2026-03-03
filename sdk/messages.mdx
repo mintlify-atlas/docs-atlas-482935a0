@@ -1,0 +1,455 @@
+---
+title: "Messages"
+description: "Send and retrieve messages via the SDK"
+---
+
+## Overview
+
+Messages are the core of conversations in Everruns. Send user messages to prompt agents, and receive agent responses with tool calls and results.
+
+## Send a message
+
+Create a user message in a session:
+
+```typescript
+const message = await client.messages.create('session_01234567-...', {
+  message: {
+    content: [
+      { type: 'text', text: 'What is the weather in Tokyo?' }
+    ]
+  }
+});
+
+console.log('Message ID:', message.id);
+```
+
+### Message structure
+
+| Property | Type | Required | Description |
+|----------|------|----------|-------------|
+| `content` | array | Yes | Message content parts |
+| `controls` | object | No | Generation controls (max_tokens, etc.) |
+| `metadata` | object | No | Custom metadata |
+
+### Text messages
+
+Simple text content:
+
+```typescript
+await client.messages.create(sessionId, {
+  message: {
+    content: [
+      { type: 'text', text: 'Hello! How can you help me today?' }
+    ]
+  }
+});
+```
+
+### Messages with images
+
+Attach images to your messages:
+
+```typescript
+// First, upload the image
+const image = await client.images.upload({
+  file: fs.createReadStream('screenshot.png'),
+  session_id: sessionId, // Optional
+});
+
+// Then send message with image
+await client.messages.create(sessionId, {
+  message: {
+    content: [
+      { type: 'text', text: 'What do you see in this image?' },
+      { type: 'image_file', image_id: image.id, filename: 'screenshot.png' }
+    ]
+  }
+});
+```
+
+### Generation controls
+
+Control LLM behavior with generation parameters:
+
+```typescript
+await client.messages.create(sessionId, {
+  message: {
+    content: [
+      { type: 'text', text: 'Write a short poem about TypeScript' }
+    ],
+    controls: {
+      max_tokens: 500,
+      temperature: 0.8,
+    }
+  }
+});
+```
+
+### Custom metadata
+
+Attach metadata for tracking:
+
+```typescript
+await client.messages.create(sessionId, {
+  message: {
+    content: [
+      { type: 'text', text: 'Analyze this customer feedback' }
+    ],
+    metadata: {
+      source: 'support-ticket',
+      ticket_id: '12345',
+      customer_id: 'cust_abc123',
+    }
+  }
+});
+```
+
+## List messages
+
+Retrieve all messages in a session:
+
+```typescript
+const response = await client.messages.list('session_01234567-...');
+
+console.log(`Found ${response.total} messages`);
+response.data.forEach(message => {
+  console.log(`[${message.role}]:`, message.content[0]?.text || '(non-text)');
+});
+```
+
+### Message roles
+
+Messages have different roles:
+
+- **user**: Messages from the user
+- **agent**: Responses from the agent
+- **tool**: Tool execution results
+
+```typescript
+const response = await client.messages.list(sessionId);
+
+response.data.forEach(message => {
+  switch (message.role) {
+    case 'user':
+      console.log('User:', message.content[0]?.text);
+      break;
+    case 'agent':
+      console.log('Agent:', message.content[0]?.text);
+      break;
+    case 'tool':
+      console.log('Tool result:', message.content[0]?.text);
+      break;
+  }
+});
+```
+
+## Content types
+
+### Text content
+
+Plain text content:
+
+```typescript
+{
+  type: 'text',
+  text: 'Hello, world!'
+}
+```
+
+### Image content
+
+Image file references:
+
+```typescript
+{
+  type: 'image_file',
+  image_id: '01933b5a-0000-7000-8000-000000000001',
+  filename: 'screenshot.png'
+}
+```
+
+### Tool calls
+
+Agent requests to call tools (in agent messages):
+
+```typescript
+{
+  type: 'tool_call',
+  id: 'call_abc123',
+  name: 'get_weather',
+  arguments: { city: 'Tokyo' }
+}
+```
+
+### Tool results
+
+Tool execution results (in tool messages):
+
+```typescript
+{
+  type: 'tool_result',
+  tool_call_id: 'call_abc123',
+  content: 'Temperature: 22°C, Sunny'
+}
+```
+
+## Working with images
+
+### Upload an image
+
+```typescript
+import fs from 'fs';
+
+const image = await client.images.upload({
+  file: fs.createReadStream('photo.jpg'),
+  session_id: sessionId, // Optional metadata
+});
+
+console.log('Image uploaded:', image.id);
+console.log('Filename:', image.filename);
+console.log('Size:', image.size_bytes, 'bytes');
+console.log('Has thumbnail:', image.has_thumbnail);
+```
+
+### List images
+
+```typescript
+const images = await client.images.list();
+
+images.data.forEach(image => {
+  console.log(`${image.filename} (${image.size_bytes} bytes)`);
+});
+```
+
+### Download image
+
+```typescript
+const imageData = await client.images.download('01933b5a-...');
+
+// Save to file
+await fs.writeFile('downloaded.png', imageData);
+```
+
+### Get thumbnail
+
+```typescript
+const thumbnail = await client.images.thumbnail('01933b5a-...');
+
+// Thumbnails are max 200x200 pixels
+await fs.writeFile('thumbnail.png', thumbnail);
+```
+
+### Delete image
+
+```typescript
+await client.images.delete('01933b5a-...');
+
+console.log('Image deleted');
+```
+
+## Error handling
+
+Handle message-related errors:
+
+```typescript
+try {
+  await client.messages.create(sessionId, {
+    message: {
+      content: [
+        { type: 'text', text: 'Hello!' }
+      ]
+    }
+  });
+} catch (error) {
+  if (error instanceof EverrunsError) {
+    switch (error.status) {
+      case 400:
+        console.error('Invalid message format:', error.message);
+        break;
+      case 404:
+        console.error('Session not found');
+        break;
+      case 422:
+        console.error('Validation error:', error.message);
+        break;
+      default:
+        console.error('API error:', error.message);
+    }
+  }
+}
+```
+
+### Handle LLM errors
+
+Listen for turn failures when sending messages:
+
+```typescript
+await client.messages.create(sessionId, {
+  message: {
+    content: [{ type: 'text', text: 'Hello!' }]
+  }
+});
+
+// Listen for potential errors
+for await (const event of client.sessions.streamEvents(sessionId)) {
+  if (event.type === 'turn.failed') {
+    console.error('Turn failed:', event.data.error);
+    console.error('Error code:', event.data.error_code);
+    
+    if (event.data.error_code === 'llm_error') {
+      console.error('Check your LLM provider configuration');
+    }
+    break;
+  }
+  
+  if (event.type === 'output.message.completed') {
+    console.log('Success!');
+    break;
+  }
+}
+```
+
+## Best practices
+
+### Clear prompts
+
+Write specific, actionable prompts:
+
+```typescript
+// Good
+await client.messages.create(sessionId, {
+  message: {
+    content: [
+      { type: 'text', text: 'Analyze the sales data from Q4 2025 and identify the top 3 products by revenue.' }
+    ]
+  }
+});
+
+// Avoid vague prompts
+await client.messages.create(sessionId, {
+  message: {
+    content: [
+      { type: 'text', text: 'Tell me about sales' } // Too vague
+    ]
+  }
+});
+```
+
+### Use metadata for tracking
+
+```typescript
+await client.messages.create(sessionId, {
+  message: {
+    content: [
+      { type: 'text', text: 'Process this customer inquiry' }
+    ],
+    metadata: {
+      source: 'email',
+      priority: 'high',
+      customer_tier: 'enterprise',
+    }
+  }
+});
+```
+
+### Optimize token usage
+
+Set appropriate token limits:
+
+```typescript
+// For short responses
+await client.messages.create(sessionId, {
+  message: {
+    content: [
+      { type: 'text', text: 'Summarize this in one sentence' }
+    ],
+    controls: {
+      max_tokens: 100, // Limit to save costs
+    }
+  }
+});
+
+// For detailed responses
+await client.messages.create(sessionId, {
+  message: {
+    content: [
+      { type: 'text', text: 'Write a detailed analysis' }
+    ],
+    controls: {
+      max_tokens: 2000,
+    }
+  }
+});
+```
+
+## Complete example
+
+Multi-turn conversation with error handling:
+
+```typescript
+import { EverrunsClient, EverrunsError } from 'everruns-sdk';
+
+async function conversation() {
+  const client = new EverrunsClient({
+    baseUrl: 'http://localhost:9300',
+  });
+
+  // Create agent and session
+  const agent = await client.agents.create({
+    name: 'Assistant',
+    system_prompt: 'You are a helpful assistant.',
+  });
+
+  const session = await client.sessions.create({
+    agent_id: agent.id,
+  });
+
+  // Helper to send message and get response
+  async function ask(question: string): Promise<string> {
+    try {
+      await client.messages.create(session.id, {
+        message: {
+          content: [{ type: 'text', text: question }]
+        }
+      });
+
+      for await (const event of client.sessions.streamEvents(session.id)) {
+        if (event.type === 'output.message.completed') {
+          return event.data.message.content[0]?.text || '';
+        }
+        if (event.type === 'turn.failed') {
+          throw new Error(event.data.error);
+        }
+      }
+    } catch (error) {
+      if (error instanceof EverrunsError) {
+        throw new Error(`API error: ${error.message}`);
+      }
+      throw error;
+    }
+  }
+
+  // Have a conversation
+  const answer1 = await ask('What is TypeScript?');
+  console.log('Agent:', answer1);
+
+  const answer2 = await ask('How does it differ from JavaScript?');
+  console.log('Agent:', answer2);
+}
+
+conversation().catch(console.error);
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+
+<Card title="Event Streaming" icon="stream" href="/sdk/streaming">
+  Listen to real-time message events
+</Card>
+
+<Card title="Sessions" icon="comments" href="/sdk/sessions">
+  Learn more about session management
+</Card>
+
+</CardGroup>

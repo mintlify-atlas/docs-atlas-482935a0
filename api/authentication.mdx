@@ -1,0 +1,282 @@
+---
+title: Authentication
+description: API authentication methods and configuration
+---
+
+Everruns supports flexible authentication modes for different deployment scenarios, from no authentication in local development to full OAuth-based authentication in production.
+
+## Authentication Modes
+
+The platform supports four authentication modes controlled by the `AUTH_MODE` environment variable:
+
+### None Mode
+
+```bash
+AUTH_MODE=none
+```
+
+No authentication required. All requests use a well-known anonymous user. Suitable for local development.
+
+### Admin Mode
+
+```bash
+AUTH_MODE=admin
+```
+
+Single admin user via environment variables. Basic access control for local development.
+
+### Full Mode
+
+```bash
+AUTH_MODE=full
+```
+
+Complete authentication with user registration, OAuth, and API keys. Suitable for production deployments.
+
+### External Mode
+
+```bash
+AUTH_MODE=external
+```
+
+Authentication managed by third-party provider (e.g., PropelAuth, Auth0, Clerk). API key authentication is still supported.
+
+## Authentication Methods
+
+When authentication is enabled, you can authenticate requests using one of three methods:
+
+### 1. Bearer Token (JWT)
+
+Include your access token in the Authorization header:
+
+```bash
+Authorization: Bearer <access_token>
+```
+
+**Example:**
+
+```bash
+curl -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIs..." \
+  https://api.example.com/v1/agents
+```
+
+**Token Characteristics:**
+- Access tokens are short-lived (default: 15 minutes)
+- Refresh tokens are stored in the database for revocation
+- Tokens include user ID, email, name, and roles
+
+<Note>
+Access tokens expire after 15 minutes by default. Use the refresh endpoint to obtain a new token pair.
+</Note>
+
+### 2. API Key
+
+API keys provide long-lived authentication for programmatic access:
+
+```bash
+Authorization: <api_key>
+```
+
+Or with explicit prefix:
+
+```bash
+Authorization: ApiKey <api_key>
+```
+
+**Example:**
+
+```bash
+curl -H "Authorization: evr_1234567890abcdef" \
+  https://api.example.com/v1/agents
+```
+
+**API Key Characteristics:**
+- Prefixed with `evr_` for identification
+- Full key shown only at creation time
+- Stored hashed using SHA-256
+- Support scopes and expiration
+- Ideal for server-to-server communication
+
+<Note>
+API keys are shown only once at creation. Store them securely - they cannot be retrieved later.
+</Note>
+
+### 3. Cookie-based Session
+
+Used by the web UI for browser-based authentication:
+
+- `access_token` cookie contains the JWT
+- `refresh_token` cookie (HTTP-only, secure) for token renewal
+
+The UI automatically handles token refresh when access tokens expire.
+
+## Managing API Keys
+
+### Create API Key
+
+```bash
+POST /v1/auth/api-keys
+```
+
+**Request:**
+```json
+{
+  "name": "Production Server",
+  "expires_at": "2025-12-31T23:59:59Z"  // optional
+}
+```
+
+**Response:**
+```json
+{
+  "id": "01933b5a-0000-7000-8000-000000000001",
+  "key": "evr_1234567890abcdef",  // shown only once
+  "name": "Production Server",
+  "created_at": "2024-01-15T10:30:00Z",
+  "expires_at": "2025-12-31T23:59:59Z"
+}
+```
+
+### List API Keys
+
+```bash
+GET /v1/auth/api-keys
+```
+
+**Response:**
+```json
+[
+  {
+    "id": "01933b5a-0000-7000-8000-000000000001",
+    "name": "Production Server",
+    "created_at": "2024-01-15T10:30:00Z",
+    "expires_at": "2025-12-31T23:59:59Z",
+    "last_used_at": "2024-01-20T14:22:00Z"
+  }
+]
+```
+
+### Delete API Key
+
+```bash
+DELETE /v1/auth/api-keys/{key_id}
+```
+
+## OAuth Providers
+
+In full authentication mode, OAuth2 is supported with the following providers:
+
+### Google OAuth
+
+- Uses OpenID Connect
+- Requires email and profile scopes
+- Supports email domain restrictions
+
+### GitHub OAuth
+
+- Requires `user:email` and `read:user` scopes
+- Supports account linking by email
+
+<Note>
+Accounts are automatically linked when the same email is used across different OAuth providers.
+</Note>
+
+## Token Refresh
+
+When your access token expires, use the refresh endpoint:
+
+```bash
+POST /v1/auth/refresh
+```
+
+**Request (programmatic clients):**
+```json
+{
+  "refresh_token": "your_refresh_token"
+}
+```
+
+**Response:**
+```json
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIs...",
+  "refresh_token": "new_refresh_token",
+  "expires_in": 900
+}
+```
+
+<Note>
+Refresh tokens are rotated on each use. The old token is invalidated when a new pair is issued.
+</Note>
+
+## Authentication Configuration
+
+Query the current authentication configuration:
+
+```bash
+GET /v1/auth/config
+```
+
+**Response:**
+```json
+{
+  "mode": "full",
+  "password_enabled": true,
+  "signup_enabled": true,
+  "oauth_providers": ["google", "github"]
+}
+```
+
+## Current User Information
+
+Retrieve information about the authenticated user:
+
+```bash
+GET /v1/auth/me
+```
+
+**Response:**
+```json
+{
+  "id": "01933b5a-0000-7000-8000-000000000001",
+  "email": "user@example.com",
+  "name": "John Doe",
+  "role": "admin",
+  "created_at": "2024-01-15T10:30:00Z"
+}
+```
+
+## Security Considerations
+
+### Token Storage
+
+- Store access tokens securely in memory
+- Never expose tokens in URLs or logs
+- Refresh tokens should be stored in secure, HTTP-only cookies for browser clients
+
+### API Key Security
+
+- API keys are hashed using SHA-256 before storage
+- Full key is displayed only once at creation
+- Treat API keys like passwords - never commit them to source control
+- Rotate keys regularly and delete unused keys
+
+### Password Requirements
+
+- Minimum 8 characters
+- Hashed using Argon2id with secure defaults
+
+### CORS Configuration
+
+For cross-origin requests, configure allowed origins:
+
+```bash
+CORS_ALLOWED_ORIGINS=https://app.example.com,https://dashboard.example.com
+```
+
+## Error Responses
+
+See the [Error Handling](/api/errors) page for authentication-related error codes:
+
+- `401 Unauthorized` - Missing or invalid credentials
+- `403 Forbidden` - Valid credentials but insufficient permissions

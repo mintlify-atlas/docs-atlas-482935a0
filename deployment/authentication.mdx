@@ -1,0 +1,481 @@
+---
+title: Authentication
+description: Configure authentication modes and OAuth providers for Everruns
+---
+
+Everruns supports flexible authentication for different deployment scenarios, from local development to production deployments with OAuth and API keys.
+
+## Authentication Modes
+
+Configure authentication using the `AUTH_MODE` environment variable.
+
+### None Mode (Default)
+
+```bash
+AUTH_MODE=none
+```
+
+No authentication required. All requests use a well-known anonymous user.
+
+**Anonymous User Details**:
+- User ID: `00000000-0000-0000-0000-000000000001`
+- Email: `anonymous@localhost`
+- Name: `Anonymous User`
+- Role: Admin
+- Organization: Default organization (auto-created)
+
+The anonymous user is a real database user seeded at startup, so all code paths (org membership, API keys, etc.) work uniformly without special-casing.
+
+**Use cases**:
+- Local development
+- Internal deployments with network-level security
+- Quick testing and prototyping
+
+### Admin Mode
+
+```bash
+AUTH_MODE=admin
+AUTH_JWT_SECRET=your-secret-key-here
+AUTH_ADMIN_EMAIL=admin@example.com
+AUTH_ADMIN_PASSWORD=changeme
+```
+
+Single admin user configured via environment variables.
+
+**Features**:
+- Single hardcoded admin account
+- JWT-based authentication
+- Cookie and bearer token support
+- No user registration
+
+**Use cases**:
+- Local development with basic access control
+- Single-user deployments
+- Testing authentication flows
+
+**Generate JWT secret**:
+```bash
+openssl rand -base64 32
+```
+
+### Full Mode
+
+```bash
+AUTH_MODE=full
+AUTH_JWT_SECRET=your-secret-key-here
+AUTH_BASE_URL=http://localhost:9300/api
+```
+
+Complete authentication system with user registration and OAuth.
+
+**Features**:
+- User registration and login
+- Password authentication (Argon2id hashing)
+- OAuth providers (Google, GitHub)
+- API key authentication
+- Refresh token rotation
+- Account linking by email
+
+**Use cases**:
+- Production deployments
+- Multi-user applications
+- SaaS platforms
+
+**Optional configuration**:
+```bash
+# Disable features
+AUTH_DISABLE_SIGNUP=true        # Disable registration
+AUTH_DISABLE_PASSWORD=true      # OAuth only
+
+# Token lifetimes
+AUTH_JWT_ACCESS_TOKEN_LIFETIME=900      # 15 minutes (default)
+AUTH_JWT_REFRESH_TOKEN_LIFETIME=2592000 # 30 days (default)
+```
+
+### External Mode
+
+```bash
+AUTH_MODE=external
+```
+
+Authentication managed by third-party provider (PropelAuth, Auth0, Clerk, etc.).
+
+**Features**:
+- External provider handles login, registration, user management
+- Built-in password auth disabled
+- Built-in OAuth disabled
+- Built-in signup disabled
+- API key authentication supported
+
+**Use cases**:
+- SaaS deployments with existing auth provider
+- Enterprise SSO integration
+- Custom authentication flows
+
+**Implementation**: Requires custom `AuthBackend` trait implementation (see `crates/server/src/auth/backend.rs`).
+
+## Authentication Methods
+
+When authentication is enabled (`admin`, `full`, or `external` modes), the following methods are supported:
+
+### 1. Bearer Token (JWT)
+
+JWT access tokens for API requests:
+
+```bash
+curl -H "Authorization: Bearer <access_token>" \
+  http://localhost:9300/api/v1/agents
+```
+
+**Token Properties**:
+- Short-lived (default: 15 minutes)
+- Contains user ID, email, name, roles
+- Signed with `AUTH_JWT_SECRET`
+- Refresh via `/v1/auth/refresh` endpoint
+
+### 2. API Key
+
+API keys for programmatic access:
+
+```bash
+curl -H "Authorization: <api_key>" \
+  http://localhost:9300/api/v1/agents
+
+# Alternative format
+curl -H "Authorization: ApiKey <api_key>" \
+  http://localhost:9300/api/v1/agents
+```
+
+**API Key Properties**:
+- Prefixed with `evr_` for identification
+- Full key shown only at creation
+- Stored hashed (SHA-256) in database
+- Supports scopes and expiration
+- Managed via UI (Settings > API Keys)
+
+**Creating API keys**:
+1. Navigate to Settings > API Keys in the UI
+2. Click "Create API Key"
+3. Set name, scopes, and optional expiration
+4. Copy the key (only shown once)
+
+### 3. Cookie-based Session
+
+Automatic authentication for web UI:
+
+- `access_token` cookie with JWT
+- `refresh_token` cookie (HTTP-only, Secure)
+- Cookies set on login with `Path=/`
+- Auto-refresh on 401 responses
+
+## OAuth Configuration
+
+### Google OAuth
+
+1. **Create OAuth credentials** in [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
+   - Application type: Web application
+   - Authorized redirect URIs: `http://localhost:9300/api/v1/auth/callback/google` (adjust for production)
+
+2. **Configure environment variables**:
+```bash
+AUTH_MODE=full
+AUTH_BASE_URL=http://localhost:9300/api
+AUTH_GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
+AUTH_GOOGLE_CLIENT_SECRET=your-client-secret
+```
+
+3. **Optional: Restrict to specific domains**:
+```bash
+AUTH_GOOGLE_ALLOWED_DOMAINS=example.com,partner.com
+```
+
+**Scopes requested**:
+- `openid` - OpenID Connect
+- `email` - User email address
+- `profile` - User name and profile
+
+### GitHub OAuth
+
+1. **Create OAuth App** in [GitHub Developer Settings](https://github.com/settings/developers)
+   - Application name: Your app name
+   - Homepage URL: `http://localhost:9300` (adjust for production)
+   - Authorization callback URL: `http://localhost:9300/api/v1/auth/callback/github`
+
+2. **Configure environment variables**:
+```bash
+AUTH_MODE=full
+AUTH_BASE_URL=http://localhost:9300/api
+AUTH_GITHUB_CLIENT_ID=your-client-id
+AUTH_GITHUB_CLIENT_SECRET=your-client-secret
+```
+
+**Scopes requested**:
+- `user:email` - User email addresses
+- `read:user` - User profile data
+
+### OAuth Flow
+
+1. User clicks OAuth button (e.g., "Continue with Google")
+2. UI persists return URL in `sessionStorage`
+3. Browser redirects to `GET /v1/auth/oauth/{provider}`
+4. Server redirects to provider's authorization page
+5. User authorizes application
+6. Provider redirects to callback URL
+7. Server exchanges code for tokens
+8. Server creates or links user account
+9. Server sets cookies and redirects to UI
+10. UI redirects to original return URL
+
+**Account Linking**: If a user signs in with OAuth and an account with the same email already exists, the accounts are automatically linked.
+
+## Worker gRPC Authentication
+
+Workers communicate with the server via gRPC (port 9001) and must authenticate using a bearer token.
+
+### Basic Authentication (Bearer Token)
+
+```bash
+# Server and all workers must have matching token
+WORKER_GRPC_AUTH_TOKEN=your-secure-random-token
+```
+
+**Generate secure token**:
+```bash
+openssl rand -base64 32
+```
+
+**Security note**: Required in production to prevent unauthorized workers from connecting.
+
+### Mutual TLS (mTLS)
+
+For production deployments, enable mutual TLS for encrypted and authenticated worker-server communication.
+
+#### Generate Certificates
+
+```bash
+# Generate CA
+openssl req -x509 -newkey rsa:4096 -days 365 -nodes \
+  -keyout ca-key.pem -out ca-cert.pem \
+  -subj "/CN=Everruns CA"
+
+# Generate server certificate
+openssl req -newkey rsa:4096 -nodes \
+  -keyout server-key.pem -out server-req.pem \
+  -subj "/CN=control-plane.internal"
+
+openssl x509 -req -in server-req.pem -days 365 \
+  -CA ca-cert.pem -CAkey ca-key.pem -CAcreateserial \
+  -out server-cert.pem
+
+# Generate client certificate (for each worker)
+openssl req -newkey rsa:4096 -nodes \
+  -keyout worker-key.pem -out worker-req.pem \
+  -subj "/CN=worker-1"
+
+openssl x509 -req -in worker-req.pem -days 365 \
+  -CA ca-cert.pem -CAkey ca-key.pem -CAcreateserial \
+  -out worker-cert.pem
+```
+
+#### Server Configuration
+
+```bash
+# Enable TLS on gRPC listener
+WORKER_GRPC_TLS_CERT=/path/to/server-cert.pem
+WORKER_GRPC_TLS_KEY=/path/to/server-key.pem
+
+# Enable client certificate verification (mTLS)
+WORKER_GRPC_TLS_CA_CERT=/path/to/ca-cert.pem
+```
+
+#### Worker Configuration
+
+```bash
+# Verify server certificate
+WORKER_GRPC_TLS_CA_CERT=/path/to/ca-cert.pem
+WORKER_GRPC_TLS_DOMAIN=control-plane.internal
+
+# Present client certificate
+WORKER_GRPC_TLS_CERT=/path/to/worker-cert.pem
+WORKER_GRPC_TLS_KEY=/path/to/worker-key.pem
+```
+
+#### Docker Compose Example
+
+```yaml
+server:
+  image: ghcr.io/everruns/everruns-server:latest
+  environment:
+    WORKER_GRPC_AUTH_TOKEN: ${WORKER_GRPC_AUTH_TOKEN}
+    WORKER_GRPC_TLS_CERT: /certs/server-cert.pem
+    WORKER_GRPC_TLS_KEY: /certs/server-key.pem
+    WORKER_GRPC_TLS_CA_CERT: /certs/ca-cert.pem
+  volumes:
+    - ./certs:/certs:ro
+
+worker-1:
+  image: ghcr.io/everruns/everruns-worker:latest
+  environment:
+    WORKER_GRPC_ADDRESS: server:9001
+    WORKER_GRPC_AUTH_TOKEN: ${WORKER_GRPC_AUTH_TOKEN}
+    WORKER_GRPC_TLS_CA_CERT: /certs/ca-cert.pem
+    WORKER_GRPC_TLS_DOMAIN: server
+    WORKER_GRPC_TLS_CERT: /certs/worker-cert.pem
+    WORKER_GRPC_TLS_KEY: /certs/worker-key.pem
+  volumes:
+    - ./certs:/certs:ro
+```
+
+## Password Requirements
+
+For `full` mode with password authentication enabled:
+
+- Minimum 8 characters
+- Hashed with Argon2id (industry-standard secure defaults)
+- Stored hashed in database (never plaintext)
+
+## Security Best Practices
+
+### Secrets Management
+
+1. **Never commit secrets to version control**
+   - Use `.env` files (add to `.gitignore`)
+   - Use secrets management service (Doppler, Vault, AWS Secrets Manager)
+   - Rotate secrets regularly
+
+2. **Strong secret generation**
+   ```bash
+   # JWT secret (minimum 32 bytes)
+   openssl rand -base64 32
+   
+   # Encryption key (32 bytes, with version prefix)
+   python3 -c "import os, base64; print('kek-v1:' + base64.b64encode(os.urandom(32)).decode())"
+   
+   # Worker gRPC token
+   openssl rand -base64 32
+   ```
+
+### Production Checklist
+
+- [ ] Use `AUTH_MODE=full` or `AUTH_MODE=external`
+- [ ] Generate strong `AUTH_JWT_SECRET` (32+ bytes)
+- [ ] Set secure `WORKER_GRPC_AUTH_TOKEN`
+- [ ] Enable TLS for all external connections
+- [ ] Configure `CORS_ALLOWED_ORIGINS` if needed
+- [ ] Use HTTP-only, Secure cookies in production
+- [ ] Set up database connection with TLS (`?sslmode=require`)
+- [ ] Enable mTLS for worker-server communication
+- [ ] Restrict OAuth to specific domains if applicable
+- [ ] Configure token expiration policies
+- [ ] Set up token refresh handling
+- [ ] Monitor authentication failures
+
+### Cookie Security
+
+In production, cookies are configured with:
+- `HttpOnly` - Prevents JavaScript access
+- `Secure` - HTTPS only
+- `SameSite=Strict` - CSRF protection
+- `Path=/` - Available to all routes
+
+## Token Refresh
+
+The UI automatically refreshes expired tokens:
+
+1. API request returns 401 Unauthorized
+2. UI intercepts response
+3. UI calls `POST /v1/auth/refresh` with refresh token
+4. Server rotates refresh token (old token deleted)
+5. Server returns new access + refresh tokens
+6. UI retries original request
+
+**Token rotation**: On refresh, the old refresh token is deleted and a new one is issued. This prevents token reuse attacks.
+
+**Concurrent 401s**: Deduplicated into a single refresh request to avoid race conditions.
+
+## Error Responses
+
+### 401 Unauthorized
+
+Missing or invalid credentials:
+
+```json
+{
+  "error": "Unauthorized"
+}
+```
+
+**Causes**:
+- Missing Authorization header
+- Expired access token
+- Invalid API key
+- Invalid JWT signature
+
+### 403 Forbidden
+
+Valid credentials but insufficient permissions:
+
+```json
+{
+  "error": "Forbidden"
+}
+```
+
+**Causes**:
+- API key lacks required scopes
+- User lacks required role
+- Resource access denied
+
+## UI Integration
+
+### Configuration Discovery
+
+UI fetches auth config on startup:
+
+```bash
+GET /v1/auth/config
+```
+
+Response:
+```json
+{
+  "mode": "full",
+  "password_enabled": true,
+  "signup_enabled": true,
+  "oauth_providers": ["google", "github"]
+}
+```
+
+### Protected Routes
+
+All routes under `/(main)/*` require authentication:
+- `/dashboard`
+- `/agents`
+- `/sessions`
+- `/settings`
+
+Public routes under `/(auth)/*`:
+- `/login`
+- `/register`
+
+### State Management
+
+Authentication state managed via:
+1. `AuthProvider` - React Context
+2. React Query - Caching auth config and user info
+3. HTTP-only Cookies - Secure token storage
+
+## API Client Configuration
+
+All API requests:
+- Go through `/api` prefix
+- Include `credentials: "include"` for cookies
+- Auto-retry with token refresh on 401
+
+The `/api` prefix is stripped by the reverse proxy (Next.js in dev, Caddy in production) before reaching the backend.
+
+## Next Steps
+
+- [Environment variables reference](/deployment/environment-variables)
+- [Docker Compose deployment](/deployment/docker-compose)
+- [Multi-instance configuration](/deployment/multi-instance)

@@ -1,0 +1,351 @@
+---
+title: Docker Compose Deployment
+description: Deploy Everruns using Docker Compose for local development and production
+---
+
+This guide walks you through deploying the complete Everruns platform using Docker Compose.
+
+## Architecture Overview
+
+The full Docker Compose deployment includes:
+
+- **PostgreSQL** - Database for persistent storage
+- **Server (Control Plane)** - HTTP API (port 9000) + gRPC server (port 9001)
+- **Workers** - Multiple worker instances for parallel task execution
+- **UI** - Next.js dashboard for management and chat
+- **Caddy** - Reverse proxy providing unified entry point
+- **Jaeger** - Distributed tracing (optional)
+
+## Quick Start
+
+### 1. Generate Encryption Key
+
+First, generate a secure encryption key for protecting API keys stored in the database:
+
+```bash
+python3 -c "import os, base64; print('kek-v1:' + base64.b64encode(os.urandom(32)).decode())"
+```
+
+This will output something like: `kek-v1:8B3uCQ4Znx45hl5nB+PKVriRrj/KtEVM+wBZ2VGa9vY=`
+
+### 2. Create Environment File
+
+Create a `.env` file with the following required variables:
+
+```bash
+# Required: Encryption key for stored API keys (use output from step 1)
+SECRETS_ENCRYPTION_KEY=kek-v1:your-generated-key-here
+
+# Required: Worker authentication token (generate a secure random string)
+WORKER_GRPC_AUTH_TOKEN=your-secure-token-here
+
+# Optional: LLM provider API keys (can also be configured via UI)
+DEFAULT_OPENAI_API_KEY=sk-...
+DEFAULT_ANTHROPIC_API_KEY=sk-ant-...
+DEFAULT_GEMINI_API_KEY=...
+```
+
+### 3. Start Services
+
+```bash
+docker compose -f docker-compose-full.yaml up -d
+```
+
+### 4. Access the Platform
+
+- **Web UI**: http://localhost:9300
+- **Jaeger UI** (tracing): http://localhost:16686
+
+## Full Docker Compose Configuration
+
+Here's the complete `docker-compose-full.yaml` from the Everruns repository:
+
+```yaml
+services:
+  # Database
+  postgres:
+    image: postgres:17-alpine
+    container_name: everruns-postgres
+    environment:
+      POSTGRES_USER: everruns
+      POSTGRES_PASSWORD: everruns
+      POSTGRES_DB: everruns
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U everruns"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Server (Control Plane) - HTTP API + gRPC server
+  server:
+    image: ghcr.io/everruns/everruns-server:${EVERRUNS_TAG:-latest}
+    container_name: everruns-server
+    environment:
+      DATABASE_URL: postgres://everruns:everruns@postgres:5432/everruns
+      SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY}
+      DEFAULT_OPENAI_API_KEY: ${DEFAULT_OPENAI_API_KEY:-}
+      DEFAULT_ANTHROPIC_API_KEY: ${DEFAULT_ANTHROPIC_API_KEY:-}
+      DEFAULT_GEMINI_API_KEY: ${DEFAULT_GEMINI_API_KEY:-}
+      WORKER_GRPC_AUTH_TOKEN: ${WORKER_GRPC_AUTH_TOKEN:-}
+      HOST: 0.0.0.0
+      PORT: "9000"
+      RUST_LOG: info
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+    depends_on:
+      postgres:
+        condition: service_healthy
+      jaeger:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app/everruns-server", "--version"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # Workers (3 instances for parallel execution)
+  worker-1:
+    image: ghcr.io/everruns/everruns-worker:${EVERRUNS_TAG:-latest}
+    container_name: everruns-worker-1
+    environment:
+      WORKER_GRPC_ADDRESS: server:9001
+      WORKER_GRPC_AUTH_TOKEN: ${WORKER_GRPC_AUTH_TOKEN:-}
+      RUST_LOG: info
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+    depends_on:
+      server:
+        condition: service_started
+    restart: unless-stopped
+
+  worker-2:
+    image: ghcr.io/everruns/everruns-worker:${EVERRUNS_TAG:-latest}
+    container_name: everruns-worker-2
+    environment:
+      WORKER_GRPC_ADDRESS: server:9001
+      WORKER_GRPC_AUTH_TOKEN: ${WORKER_GRPC_AUTH_TOKEN:-}
+      RUST_LOG: info
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+    depends_on:
+      server:
+        condition: service_started
+    restart: unless-stopped
+
+  worker-3:
+    image: ghcr.io/everruns/everruns-worker:${EVERRUNS_TAG:-latest}
+    container_name: everruns-worker-3
+    environment:
+      WORKER_GRPC_ADDRESS: server:9001
+      WORKER_GRPC_AUTH_TOKEN: ${WORKER_GRPC_AUTH_TOKEN:-}
+      RUST_LOG: info
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+    depends_on:
+      server:
+        condition: service_started
+    restart: unless-stopped
+
+  # UI (Next.js dashboard)
+  ui:
+    image: ghcr.io/everruns/everruns-ui:${EVERRUNS_TAG:-latest}
+    container_name: everruns-ui
+    environment:
+      PORT: "9100"
+      HOSTNAME: 0.0.0.0
+    depends_on:
+      server:
+        condition: service_started
+
+  # Caddy Reverse Proxy (unified entry point)
+  caddy:
+    image: caddy:2-alpine
+    container_name: everruns-caddy
+    ports:
+      - "9300:9300"
+    configs:
+      - source: caddyfile
+        target: /etc/caddy/Caddyfile
+    depends_on:
+      - server
+      - ui
+    restart: unless-stopped
+
+  # Jaeger (distributed tracing)
+  jaeger:
+    image: jaegertracing/jaeger:2.4.0
+    container_name: everruns-jaeger
+    ports:
+      - "16686:16686" # Jaeger UI
+    expose:
+      - "4317" # OTLP gRPC
+      - "4318" # OTLP HTTP
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 4318 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+configs:
+  caddyfile:
+    content: |
+      # Reverse proxy routes:
+      #   /api/*     -> API (strips prefix)
+      #   /api-doc/* -> API
+      #   /health    -> API
+      #   /*         -> UI
+      :9300 {
+        handle_path /api/* {
+          reverse_proxy server:9000 {
+            # Disable response buffering for SSE streaming
+            flush_interval -1
+          }
+        }
+        handle /api-doc/* {
+          reverse_proxy server:9000
+        }
+        handle /health {
+          reverse_proxy server:9000
+        }
+        handle {
+          reverse_proxy ui:9100
+        }
+      }
+
+volumes:
+  postgres_data:
+```
+
+## Production Deployment Best Practices
+
+### Security
+
+1. **Use Strong Secrets**
+   - Generate cryptographically secure `SECRETS_ENCRYPTION_KEY` and `WORKER_GRPC_AUTH_TOKEN`
+   - Never commit secrets to version control
+   - Use a secrets management service (Doppler, Vault, etc.)
+
+2. **Enable TLS**
+   - Configure Caddy with TLS certificates for HTTPS
+   - Enable mutual TLS (mTLS) for worker-server communication (see [Authentication](/deployment/authentication))
+
+3. **Database Security**
+   - Use strong PostgreSQL password (not the example `everruns:everruns`)
+   - Enable SSL/TLS for database connections (`?sslmode=require`)
+   - Restrict PostgreSQL network access
+
+### High Availability
+
+1. **Database**
+   - Use managed PostgreSQL (AWS RDS, Google Cloud SQL, etc.)
+   - Enable automated backups
+   - Use PostgreSQL 17 for UUID v7 support
+
+2. **Multi-Instance Deployment**
+   - Deploy multiple server instances behind a load balancer
+   - Set `EXPECTED_INSTANCES` to the number of server instances
+   - See [Multi-Instance Deployment](/deployment/multi-instance)
+
+3. **Worker Scaling**
+   - Add more worker containers for increased throughput
+   - Workers are stateless and can scale horizontally
+   - Monitor task queue depth to determine optimal worker count
+
+### Monitoring
+
+1. **Health Checks**
+   - Server health endpoint: `GET /health`
+   - Monitor PostgreSQL connection pool metrics
+   - Track worker heartbeat status
+
+2. **Observability**
+   - Enable OpenTelemetry tracing (`OTEL_EXPORTER_OTLP_ENDPOINT`)
+   - Use Jaeger or another OTLP-compatible backend
+   - Monitor LLM token usage and costs
+
+3. **Logging**
+   - Configure `RUST_LOG` for appropriate log levels (info, warn, error)
+   - Centralize logs using Docker logging drivers
+   - Track error rates and response times
+
+### Resource Limits
+
+Add resource limits to prevent runaway containers:
+
+```yaml
+server:
+  # ... existing config ...
+  deploy:
+    resources:
+      limits:
+        cpus: '2'
+        memory: 4G
+      reservations:
+        cpus: '1'
+        memory: 2G
+```
+
+### Database Connection Pooling
+
+Configure database pool size based on expected load:
+
+```bash
+# For multi-instance deployment
+DATABASE_POOL_MAX=20  # Max connections per instance
+EXPECTED_INSTANCES=3  # Total server instances
+# Total connections = 20 * 3 = 60 (ensure < postgres max_connections)
+```
+
+## Image Registry
+
+Official images are published to GitHub Container Registry:
+
+- `ghcr.io/everruns/everruns-server:latest`
+- `ghcr.io/everruns/everruns-worker:latest`
+- `ghcr.io/everruns/everruns-ui:latest`
+
+Use specific version tags for production:
+
+```bash
+EVERRUNS_TAG=v1.0.0 docker compose -f docker-compose-full.yaml up -d
+```
+
+## Troubleshooting
+
+### Migrations Not Running
+
+Migrations auto-apply on server startup. If they fail:
+
+1. Check database connectivity: `docker logs everruns-server`
+2. Verify PostgreSQL is healthy: `docker ps`
+3. Check migration lock: migrations use advisory locks for multi-instance safety
+
+To disable auto-migrations:
+
+```yaml
+server:
+  command: ["--no-migrations"]
+```
+
+### Workers Not Connecting
+
+If workers can't connect to the server:
+
+1. Verify `WORKER_GRPC_ADDRESS` is correct (use service name in Docker network)
+2. Check `WORKER_GRPC_AUTH_TOKEN` matches on server and workers
+3. Ensure server gRPC port (9001) is accessible within Docker network
+4. Review worker logs: `docker logs everruns-worker-1`
+
+### SSE Connection Issues
+
+For Server-Sent Events (SSE) streaming problems:
+
+1. Ensure Caddy is configured with `flush_interval -1`
+2. Check reverse proxy timeout settings
+3. Verify HTTP/2 flow control settings (see [Multi-Instance](/deployment/multi-instance))
+
+## Next Steps
+
+- [Configure environment variables](/deployment/environment-variables)
+- [Set up authentication](/deployment/authentication)
+- [Deploy multi-instance for HA](/deployment/multi-instance)

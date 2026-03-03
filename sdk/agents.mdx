@@ -1,0 +1,287 @@
+---
+title: "Agents"
+description: "Create and manage AI agents via the SDK"
+---
+
+## Overview
+
+Agents are AI assistants with configurable system prompts, capabilities, and model settings. Use the SDK to programmatically manage your agents.
+
+## Create an agent
+
+Create a new agent with custom configuration:
+
+```typescript
+const agent = await client.agents.create({
+  name: 'Code Assistant',
+  description: 'Helps with coding tasks',
+  system_prompt: 'You are an expert software engineer. Help users write clean, efficient code.',
+  capabilities: [
+    { ref: 'current_time' },
+    { ref: 'session_file_system' }
+  ],
+  model_id: 'gpt-4o',
+});
+
+console.log('Agent ID:', agent.id);
+console.log('Status:', agent.status);
+```
+
+### Agent properties
+
+| Property | Type | Required | Description |
+|----------|------|----------|-------------|
+| `name` | string | Yes | Agent display name |
+| `description` | string | No | Brief description of the agent |
+| `system_prompt` | string | Yes | System instructions for the agent |
+| `capabilities` | array | No | Enabled capabilities (tools, features) |
+| `model_id` | string | No | LLM model identifier |
+| `tags` | string[] | No | Tags for organization |
+
+## List agents
+
+Retrieve all agents in your organization:
+
+```typescript
+const response = await client.agents.list();
+
+console.log(`Found ${response.total} agents`);
+response.data.forEach(agent => {
+  console.log(`- ${agent.name} (${agent.id})`);
+});
+```
+
+## Get agent details
+
+Fetch a specific agent by ID:
+
+```typescript
+const agent = await client.agents.get('agent_01234567-...');
+
+console.log('Agent name:', agent.name);
+console.log('System prompt:', agent.system_prompt);
+console.log('Capabilities:', agent.capabilities);
+```
+
+## Update an agent
+
+Modify an existing agent's configuration:
+
+```typescript
+const updated = await client.agents.update('agent_01234567-...', {
+  name: 'Advanced Code Assistant',
+  system_prompt: 'You are an expert in TypeScript and React.',
+  capabilities: [
+    { ref: 'current_time' },
+    { ref: 'session_file_system' },
+    { ref: 'web_fetch' }
+  ],
+});
+
+console.log('Agent updated:', updated.id);
+```
+
+<Note>
+Use `PATCH` for partial updates. Only include fields you want to change.
+</Note>
+
+## Agent capabilities
+
+Capabilities add tools and features to your agent:
+
+```typescript
+const agent = await client.agents.create({
+  name: 'Research Agent',
+  system_prompt: 'You are a research assistant.',
+  capabilities: [
+    // Built-in capabilities
+    { ref: 'current_time' },
+    { ref: 'web_fetch', config: { timeout_ms: 30000 } },
+    { ref: 'session_file_system' },
+    
+    // MCP server capabilities
+    { ref: 'mcp:01234567-89ab-cdef-0123-456789abcdef' }
+  ],
+});
+```
+
+### Available capabilities
+
+Fetch all available capabilities:
+
+```typescript
+const capabilities = await client.capabilities.list();
+
+capabilities.items.forEach(cap => {
+  console.log(`${cap.name} (${cap.id})`);
+  console.log(`  ${cap.description}`);
+  console.log(`  Category: ${cap.category}`);
+});
+```
+
+## Preview agent configuration
+
+Preview the final agent shape before creating it:
+
+```typescript
+const preview = await client.agents.preview({
+  system_prompt: 'You are a helpful assistant.',
+  capabilities: [
+    { ref: 'current_time' },
+  ],
+});
+
+console.log('Final system prompt:');
+console.log(preview.system_prompt);
+
+console.log('\nAvailable tools:');
+preview.tools.forEach(tool => {
+  console.log(`- ${tool.name}: ${tool.description}`);
+});
+```
+
+<Tip>
+Use preview to see how capabilities modify the system prompt and which tools will be available.
+</Tip>
+
+## Copy an agent
+
+Create a duplicate of an existing agent:
+
+```typescript
+const copy = await client.agents.copy('agent_01234567-...');
+
+console.log('Copied agent:', copy.name); // "Original Name (copy)"
+console.log('New ID:', copy.id);
+```
+
+## Archive an agent
+
+Soft delete an agent (can be restored):
+
+```typescript
+await client.agents.delete('agent_01234567-...');
+
+console.log('Agent archived');
+```
+
+## Import and export
+
+### Export agent
+
+Export an agent as Markdown:
+
+```typescript
+const markdown = await client.agents.export('agent_01234567-...');
+
+// Save to file
+await fs.writeFile('my-agent.md', markdown);
+```
+
+### Import agent
+
+Import an agent from Markdown content:
+
+```typescript
+const markdown = await fs.readFile('my-agent.md', 'utf-8');
+
+const agent = await client.agents.import({
+  content: markdown,
+});
+
+console.log('Agent imported:', agent.id);
+```
+
+## Error handling
+
+Handle common agent-related errors:
+
+```typescript
+try {
+  const agent = await client.agents.create({
+    name: 'My Agent',
+    system_prompt: 'You are helpful.',
+  });
+} catch (error) {
+  if (error instanceof EverrunsError) {
+    switch (error.status) {
+      case 400:
+        console.error('Invalid agent configuration:', error.message);
+        break;
+      case 401:
+        console.error('Authentication required');
+        break;
+      case 422:
+        console.error('Validation error:', error.message);
+        break;
+      default:
+        console.error('API error:', error.message);
+    }
+  } else {
+    console.error('Unexpected error:', error);
+  }
+}
+```
+
+## Best practices
+
+### Clear system prompts
+
+Write specific, actionable system prompts:
+
+```typescript
+// Good
+const agent = await client.agents.create({
+  name: 'SQL Helper',
+  system_prompt: `You are a SQL expert. When users ask questions:
+1. Clarify the database schema if needed
+2. Write efficient, well-formatted SQL queries
+3. Explain your reasoning
+4. Suggest optimizations when relevant`,
+});
+
+// Avoid vague prompts
+const vagueAgent = await client.agents.create({
+  name: 'Helper',
+  system_prompt: 'You are helpful.', // Too vague
+});
+```
+
+### Organize with tags
+
+Use tags to categorize agents:
+
+```typescript
+const agent = await client.agents.create({
+  name: 'Code Reviewer',
+  system_prompt: 'You review code for quality and security.',
+  tags: ['development', 'code-review', 'production'],
+});
+```
+
+### Version control
+
+Export agents to version control:
+
+```bash
+# Export agent configuration
+node scripts/export-agents.js
+
+# Commit to git
+git add agents/*.md
+git commit -m "Update agent configurations"
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+
+<Card title="Sessions" icon="comments" href="/sdk/sessions">
+  Create sessions to use your agents
+</Card>
+
+<Card title="Messages" icon="message" href="/sdk/messages">
+  Send messages and interact with agents
+</Card>
+
+</CardGroup>

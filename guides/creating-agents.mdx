@@ -1,0 +1,434 @@
+---
+title: Creating Agents
+description: Learn how to create and configure agents in Everruns
+---
+
+Agents are the core of Everruns. They define the behavior, capabilities, and personality of your AI assistant. This guide shows you how to create agents using the API, SDK, and CLI.
+
+## Goal
+
+By the end of this guide, you'll be able to:
+- Create agents with custom system prompts
+- Configure capabilities to extend agent functionality  
+- Use different methods (API, SDK, CLI) to manage agents
+- Import agents from markdown files
+
+## Creating Your First Agent
+
+<Steps>
+
+### Choose your creation method
+
+You can create agents using the REST API, SDK, or CLI. Pick the approach that fits your workflow.
+
+### Define the agent configuration
+
+At minimum, an agent needs:
+- **name**: A unique identifier for your agent
+- **system_prompt**: Instructions that define the agent's behavior
+
+Optional fields:
+- **description**: User-facing description of what the agent does
+- **default_model_id**: Override the organization's default LLM model
+- **tags**: For organizing and filtering agents
+- **capabilities**: Modular tools and features to enable
+
+### Create the agent
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST https://app.everruns.com/api/v1/agents \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Customer Support Agent",
+    "system_prompt": "You are a helpful customer support agent. Be concise, friendly, and always ask clarifying questions before making assumptions.",
+    "description": "Handles customer inquiries with a friendly tone",
+    "tags": ["support", "customer-facing"],
+    "capabilities": ["current_time", "web_fetch"]
+  }'
+```
+
+```python Python SDK
+from everruns import Everruns
+
+client = Everruns(api_key="YOUR_API_KEY")
+
+agent = client.agents.create(
+    name="Customer Support Agent",
+    system_prompt="You are a helpful customer support agent. Be concise, friendly, and always ask clarifying questions before making assumptions.",
+    description="Handles customer inquiries with a friendly tone",
+    tags=["support", "customer-facing"],
+    capabilities=["current_time", "web_fetch"]
+)
+
+print(f"Created agent: {agent.id}")
+```
+
+```typescript TypeScript SDK
+import { Everruns } from '@everruns/sdk';
+
+const client = new Everruns({ apiKey: 'YOUR_API_KEY' });
+
+const agent = await client.agents.create({
+  name: 'Customer Support Agent',
+  system_prompt: 'You are a helpful customer support agent. Be concise, friendly, and always ask clarifying questions before making assumptions.',
+  description: 'Handles customer inquiries with a friendly tone',
+  tags: ['support', 'customer-facing'],
+  capabilities: ['current_time', 'web_fetch']
+});
+
+console.log(`Created agent: ${agent.id}`);
+```
+
+```bash CLI
+everruns agents create \
+  --name "Customer Support Agent" \
+  --system-prompt "You are a helpful customer support agent. Be concise, friendly, and always ask clarifying questions before making assumptions." \
+  --description "Handles customer inquiries with a friendly tone" \
+  --tag support \
+  --tag customer-facing
+```
+
+</CodeGroup>
+
+### Verify creation
+
+The API returns the complete agent object with a generated ID:
+
+```json
+{
+  "id": "agt_01933b5a00007000800000000001",
+  "name": "Customer Support Agent",
+  "system_prompt": "You are a helpful customer support agent...",
+  "description": "Handles customer inquiries with a friendly tone",
+  "tags": ["support", "customer-facing"],
+  "capabilities": ["current_time", "web_fetch"],
+  "status": "active",
+  "created_at": "2024-01-15T10:30:00Z",
+  "updated_at": "2024-01-15T10:30:00Z"
+}
+```
+
+</Steps>
+
+## Creating Agents from Files
+
+For complex agents with long system prompts, use file-based configuration.
+
+### Markdown Format (Recommended)
+
+Markdown files with YAML front matter provide the best readability:
+
+```markdown research-agent.md
+---
+name: "Research Agent"
+description: "Conducts thorough technical research with organized note-taking"
+tags:
+  - research
+  - analysis
+capabilities:
+  - web_fetch
+  - session_file_system
+  - stateless_todo_list
+---
+You are an expert research analyst. Your role is to conduct thorough research on
+technical topics, gathering information from multiple sources and synthesizing
+findings into clear, well-organized reports.
+
+## Research Methodology
+
+1. **Plan First**: Break down the research topic into specific questions
+2. **Gather Information**: Fetch content from authoritative sources
+3. **Take Notes**: Save key findings to files as you research
+4. **Synthesize**: Combine findings into a coherent analysis
+5. **Report**: Create a final report with citations
+
+## Quality Standards
+
+- Always cite your sources
+- Distinguish between facts and opinions
+- Note any limitations or gaps in available information
+```
+
+Import the agent:
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST https://app.everruns.com/api/v1/agents/import \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  --data-binary @research-agent.md
+```
+
+```bash CLI
+everruns agents create --file research-agent.md
+```
+
+</CodeGroup>
+
+### YAML Format
+
+```yaml agent.yaml
+name: "Data Analyst Agent"
+description: "Analyzes datasets and generates insights"
+system_prompt: |
+  You are a data analyst. When given data, you:
+  1. Explore the structure and data types
+  2. Identify patterns and outliers
+  3. Generate visualizations
+  4. Provide actionable insights
+tags:
+  - analytics
+  - data
+capabilities:
+  - session_file_system
+```
+
+### JSON Format
+
+```json agent.json
+{
+  "name": "Code Review Agent",
+  "description": "Reviews code for best practices and potential issues",
+  "system_prompt": "You are an expert code reviewer. Focus on: security vulnerabilities, performance issues, maintainability, and adherence to best practices.",
+  "tags": ["code-review", "development"],
+  "capabilities": ["session_file_system"]
+}
+```
+
+## Advanced Configuration
+
+### Using the Preview Endpoint
+
+Before creating an agent, preview how capabilities affect the final system prompt and tools:
+
+```bash
+curl -X POST https://app.everruns.com/api/v1/agents/preview \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "system_prompt": "You are a helpful assistant.",
+    "capabilities": [
+      { "ref": "current_time" },
+      { "ref": "web_fetch", "config": { "timeout_ms": 30000 } }
+    ]
+  }'
+```
+
+Response shows the merged system prompt with capability instructions prepended:
+
+```json
+{
+  "system_prompt": "## Current Time\nYou have access to get_current_time tool...\n\nYou are a helpful assistant.",
+  "tools": [
+    {
+      "name": "get_current_time",
+      "description": "Get the current date and time",
+      "parameters": { ... }
+    },
+    {
+      "name": "fetch_url",
+      "description": "Fetch content from a URL",
+      "parameters": { ... }
+    }
+  ]
+}
+```
+
+<Warning>
+The preview endpoint does NOT persist the agent. It's for inspection only.
+</Warning>
+
+### Model Override
+
+Override the default model for specific agents:
+
+```json
+{
+  "name": "Complex Reasoning Agent",
+  "system_prompt": "You solve complex problems with detailed step-by-step reasoning.",
+  "default_model_id": "mod_01933b5a00007000800000000042"
+}
+```
+
+The model ID must reference a configured LLM model in your organization. See [LLM Provider Configuration](/api-reference/llm-providers) for model management.
+
+### Upserting Agents
+
+Use PUT to create or update an agent with a specific ID:
+
+```bash
+curl -X PUT https://app.everruns.com/api/v1/agents/agt_custom_id \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Updated Agent",
+    "system_prompt": "New instructions"
+  }'
+```
+
+- Returns **201 Created** if the agent didn't exist
+- Returns **200 OK** if the agent was updated
+
+## Common Patterns
+
+### Multi-Capability Agent
+
+Agents can combine multiple capabilities for complex workflows:
+
+```json
+{
+  "name": "DevOps Engineer",
+  "system_prompt": "You are a DevOps engineer. Help users manage infrastructure, debug issues, and automate deployments.",
+  "capabilities": [
+    "session_file_system",  // Read/write deployment configs
+    "web_fetch",            // Check service health
+    "current_time",         // Timestamp logs
+    "stateless_todo_list"   // Track deployment steps
+  ]
+}
+```
+
+### Specialized Single-Purpose Agent
+
+```json
+{
+  "name": "Meeting Summarizer",
+  "system_prompt": "You summarize meeting transcripts. Extract: key decisions, action items, attendees, and next steps. Format as markdown with sections.",
+  "capabilities": []
+}
+```
+
+No capabilities needed for pure text processing tasks.
+
+### Client-Side Tool Integration
+
+Agents can define client-side tools that your application implements:
+
+```json
+{
+  "name": "CRM Assistant",
+  "system_prompt": "You help users look up customer information. When asked about a customer, use the lookup_crm tool with their customer ID.",
+  "client_tools": [
+    {
+      "type": "client",
+      "name": "lookup_crm",
+      "description": "Look up a customer record in the CRM system by customer ID. Returns name, email, plan, and signup date.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "customer_id": {
+            "type": "string",
+            "description": "The customer ID to look up (e.g. CUST-42)"
+          }
+        },
+        "required": ["customer_id"]
+      }
+    }
+  ]
+}
+```
+
+See [Client-Side Tools](/guides/client-side-tools) for the complete integration flow.
+
+## Managing Agents
+
+### List All Agents
+
+<CodeGroup>
+
+```bash cURL
+curl https://app.everruns.com/api/v1/agents \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+```bash CLI
+everruns agents list
+```
+
+</CodeGroup>
+
+### Get Agent Details
+
+<CodeGroup>
+
+```bash cURL
+curl https://app.everruns.com/api/v1/agents/agt_01933b5a \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+```bash CLI
+everruns agents get agt_01933b5a
+```
+
+</CodeGroup>
+
+### Update Agent
+
+Use PATCH to update specific fields:
+
+```bash
+curl -X PATCH https://app.everruns.com/api/v1/agents/agt_01933b5a \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "system_prompt": "Updated instructions",
+    "capabilities": ["current_time", "web_fetch", "session_file_system"]
+  }'
+```
+
+### Archive Agent
+
+Archiving soft-deletes the agent (status becomes `archived`):
+
+<CodeGroup>
+
+```bash cURL
+curl -X DELETE https://app.everruns.com/api/v1/agents/agt_01933b5a \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+```bash CLI
+everruns agents delete agt_01933b5a
+```
+
+</CodeGroup>
+
+### Copy Agent
+
+Create a duplicate with a new ID:
+
+```bash
+curl -X POST https://app.everruns.com/api/v1/agents/agt_01933b5a/copy \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+The copy will have the name "(original name) (copy)".
+
+## Common Pitfalls
+
+<Warning>
+**Input Size Limits**: Agent fields have size limits to prevent abuse:
+- System prompts: Check specs/models.md for current limits
+- Excessively long prompts return `400 Bad Request` with "Input exceeds allowed limits"
+</Warning>
+
+<Warning>
+**Capability References**: Capability IDs must match exactly. Use `GET /v1/capabilities` to see available capabilities.
+
+Invalid capability references may cause agent creation to fail.
+</Warning>
+
+<Warning>
+**Client Tool Schema**: Client-side tool parameters must follow JSON Schema format. Invalid schemas will cause LLM parsing errors at runtime.
+</Warning>
+
+## Next Steps
+
+- [Add capabilities to your agent](/guides/adding-capabilities)
+- [Create a session to run your agent](/guides/managing-sessions)
+- [Learn about available capabilities](/api-reference/capabilities)
+- [Explore agent examples](https://github.com/everruns/everruns/tree/main/examples/agents)

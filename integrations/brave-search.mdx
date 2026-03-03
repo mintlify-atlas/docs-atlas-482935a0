@@ -1,0 +1,261 @@
+---
+title: Brave Search
+description: Integrate web search capabilities with Brave Search API
+---
+
+Brave Search integration enables agents to search the web and retrieve relevant results. The integration is stateless and requires only API key configuration.
+
+## Overview
+
+Brave Search capability provides:
+- **Web search** - Search the web and get relevant results
+- **Pagination** - Control result count and offset
+- **Time filters** - Filter results by recency (past day, week, month, year)
+- **Stateless** - No per-resource state management needed
+
+**Status:** Experimental (dev-only)
+
+## Setup
+
+<Steps>
+  <Step title="Get API key">
+    Sign up for Brave Search API at [Brave Search API](https://brave.com/search/api/) and get your API key.
+  </Step>
+
+  <Step title="Configure API key">
+    **Option 1: User Connection (recommended)**
+
+    Navigate to **Settings > Connections > Brave Search** and enter your API key.
+
+    ```bash
+    # Via API
+    curl -X POST https://api.everruns.com/v1/user/connections/api-key/brave_search \
+      -H "Authorization: Bearer YOUR_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d '{"api_key": "BSA..."}'
+    ```
+
+    **Option 2: Session Secret**
+
+    Set `BRAVE_SEARCH_API_KEY` as a session secret:
+
+    ```bash
+    curl -X POST https://api.everruns.com/v1/sessions/{session_id}/storage/secrets \
+      -H "Authorization: Bearer YOUR_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "name": "BRAVE_SEARCH_API_KEY",
+        "value": "BSA..."
+      }'
+    ```
+  </Step>
+
+  <Step title="Enable capability">
+    Add `brave_search` to your agent's capabilities:
+
+    ```bash
+    curl -X PATCH https://api.everruns.com/v1/agents/{agent_id} \
+      -H "Authorization: Bearer YOUR_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "capabilities": [{"ref": "brave_search"}]
+      }'
+    ```
+  </Step>
+</Steps>
+
+## Web Search Tool
+
+### brave_web_search
+
+Search the web using Brave Search API.
+
+**Parameters:**
+- `query` (string, required) - Search query
+- `count` (integer, optional, 1-20, default: 10) - Number of results
+- `offset` (integer, optional) - Pagination offset
+- `freshness` (string, optional) - Time filter:
+  - `pd` - Past day
+  - `pw` - Past week
+  - `pm` - Past month
+  - `py` - Past year
+
+**Returns:**
+```json
+{
+  "query": "rust async programming",
+  "results": [
+    {
+      "title": "Asynchronous Programming in Rust",
+      "url": "https://rust-lang.github.io/async-book/",
+      "description": "Learn about async programming in Rust...",
+      "age": "2 days ago"
+    }
+  ],
+  "count": 10
+}
+```
+
+### Example Usage
+
+<Tabs>
+  <Tab title="Basic Search">
+    ```json
+    {
+      "tool": "brave_web_search",
+      "arguments": {
+        "query": "what is rust programming language",
+        "count": 5
+      }
+    }
+    ```
+  </Tab>
+
+  <Tab title="Recent Results">
+    ```json
+    {
+      "tool": "brave_web_search",
+      "arguments": {
+        "query": "latest rust releases",
+        "count": 10,
+        "freshness": "pw"
+      }
+    }
+    ```
+    Returns only results from the past week.
+  </Tab>
+
+  <Tab title="Pagination">
+    ```json
+    // First page
+    {
+      "tool": "brave_web_search",
+      "arguments": {
+        "query": "rust web frameworks",
+        "count": 10,
+        "offset": 0
+      }
+    }
+
+    // Second page
+    {
+      "tool": "brave_web_search",
+      "arguments": {
+        "query": "rust web frameworks",
+        "count": 10,
+        "offset": 10
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## API Key Resolution
+
+The API key is resolved lazily at tool execution time:
+
+1. **User connections** (preferred): `PUT /v1/user/connections/api-key/brave_search`
+2. **Session secret** (fallback): `BRAVE_SEARCH_API_KEY`
+3. **Error**: Guidance to configure in Settings > Connections
+
+**Benefits of user connections:**
+- Persistent across sessions
+- User-scoped (not session-scoped)
+- Encrypted at rest
+- No need to set per-session
+
+## Security
+
+### API Key Storage
+
+- **User connections**: Encrypted via envelope encryption (AES-256-GCM)
+- **Session secrets**: Encrypted via envelope encryption
+- **Never exposed**: API key never appears in tool results or message history
+- **HTTPS only**: All API requests over HTTPS
+
+### Rate Limiting
+
+Rate limiting is handled by the Brave Search API:
+- Returns `429` on rate limit exceeded
+- Agents should handle rate limit errors gracefully
+
+## Error Handling
+
+| Scenario | Result Type | Message |
+|----------|-------------|----------|
+| Missing `query` parameter | `ToolError` | "Missing required parameter: query" |
+| API key not configured | `ToolError` | "Brave Search API key not configured..." |
+| HTTP 401 (Unauthorized) | `ToolError` | "Brave Search API error (401): ..." |
+| HTTP 429 (Rate Limited) | `ToolError` | "Brave Search API error (429): ..." |
+| No context | `ToolError` | "brave_web_search requires context." |
+
+## Connection Provider
+
+Brave Search registers as a connection provider plugin:
+
+**Provider details:**
+- **ID**: `brave_search`
+- **Display Name**: Brave Search
+- **Type**: API Key
+- **Icon**: `search`
+
+**Validation**: API key is validated via `GET https://api.search.brave.com/res/v1/web/search?q=test` endpoint.
+
+## Comparison with Other Capabilities
+
+| Feature | Brave Search | Daytona | CodeSandbox |
+|---------|--------------|---------|-------------|
+| **Stateless** | Yes | No (per-sandbox state) | No (per-sandbox state) |
+| **Dependencies** | None | `session_storage` | `session_storage` |
+| **API Key Storage** | User connection or secret | User connection or secret | Session secret |
+| **External Service** | Yes | Yes | Yes |
+
+## Threat Model
+
+Search results returned as tool results can contain adversarial content:
+
+- **TM-LLM-008**: Search result prompt injection (accepted risk)
+- Results use `tool_result` role, not `system`
+- Inherent LLM limitation (same as TM-TOOL-005)
+
+See [Threat Model](/security/threat-model) for full analysis.
+
+## Design Decisions
+
+### API Key in User Connections (Not Just Session Secrets)
+
+User connections are persistent across sessions and user-scoped. Session secrets are per-session and lost when the session ends. User connections are the preferred storage for long-lived API keys.
+
+### Stateless (No Per-Resource State)
+
+Unlike Daytona (which manages sandbox lifecycle), Brave Search is stateless. Each search is independent. No sandbox state, no session state beyond the API key.
+
+### No Dependencies
+
+Unlike Daytona (which depends on `session_storage`), Brave Search has no capability dependencies. The API key resolution uses the connection resolver and storage store from ToolContext directly.
+
+## Testing
+
+Brave Search includes comprehensive test coverage:
+
+**Unit tests:**
+```bash
+cargo test -p everruns-integrations-brave-search
+```
+
+Uses `wiremock` for HTTP-level assertions (auth headers, query params, error codes).
+
+**Integration tests (real API):**
+```bash
+BRAVE_SEARCH_API_KEY=<key> cargo test -p everruns-integrations-brave-search --features integration
+```
+
+Tests: `smoke_basic_search`, `smoke_freshness_filter`, `smoke_pagination`.
+
+Tests gracefully skip when `BRAVE_SEARCH_API_KEY` is not set.
+
+## Next Steps
+
+- [Create agents](/guides/agents) - Build agents with web search
+- [User connections](/settings/connections) - Configure API key
+- [Tool execution](/concepts/tools) - How tools are executed

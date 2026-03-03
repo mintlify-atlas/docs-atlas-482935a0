@@ -1,0 +1,141 @@
+---
+title: Update Session
+description: Update session properties
+---
+
+## PATCH /v1/sessions/{session_id}
+
+Updates properties of an existing session. Only the fields provided in the request body will be updated.
+
+## Path Parameters
+
+<ParamField path="session_id" type="string" required>
+  The ID of the session to update. Must be a valid session ID with the `session_` prefix.
+</ParamField>
+
+## Request Body
+
+All fields are optional. Only include the fields you want to update.
+
+<ParamField body="title" type="string">
+  Updated title for the session.
+</ParamField>
+
+<ParamField body="tags" type="string[]">
+  Updated tags for the session. Replaces existing tags entirely.
+</ParamField>
+
+<ParamField body="model_id" type="string">
+  Updated model override for this session. Set to override the agent's default model.
+</ParamField>
+
+<ParamField body="capabilities" type="object[]">
+  Updated session-level capabilities. Replaces existing session capabilities entirely.
+  
+  Session capabilities are **additive** to the agent's capabilities:
+  1. Agent capabilities are applied first
+  2. Session capabilities are applied after (additive)
+  
+  Each capability object contains:
+  - `ref` (string, required): Capability reference ID (e.g., "current_time", "web_fetch")
+  - `config` (object, optional): Configuration overrides for the capability
+</ParamField>
+
+## Response
+
+Returns the updated `Session` object.
+
+<ResponseField name="id" type="string">
+  The session's public ID with the `session_` prefix.
+</ResponseField>
+
+<ResponseField name="agent_id" type="string">
+  The ID of the agent assigned to this session (cannot be changed).
+</ResponseField>
+
+<ResponseField name="title" type="string">
+  The updated session title.
+</ResponseField>
+
+<ResponseField name="tags" type="string[]">
+  Updated tags associated with the session.
+</ResponseField>
+
+<ResponseField name="model_id" type="string">
+  Updated model override for this session.
+</ResponseField>
+
+<ResponseField name="capabilities" type="object[]">
+  Updated session-level capabilities.
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Current session status: `started`, `active`, or `idle`.
+</ResponseField>
+
+<ResponseField name="features" type="string[]">
+  Computed at read time by aggregating features from all active capabilities.
+</ResponseField>
+
+<ResponseField name="created_at" type="string">
+  ISO 8601 timestamp when the session was created.
+</ResponseField>
+
+<ResponseField name="updated_at" type="string">
+  ISO 8601 timestamp when the session was last updated.
+</ResponseField>
+
+## Examples
+
+### Update title
+
+```bash
+curl -X PATCH https://api.everruns.com/v1/sessions/session_01234567-89ab-cdef-0123-456789abcdef \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Updated Research Session"
+  }'
+```
+
+### Update capabilities
+
+```bash
+curl -X PATCH https://api.everruns.com/v1/sessions/session_01234567-89ab-cdef-0123-456789abcdef \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "capabilities": [
+      { "ref": "current_time" },
+      { "ref": "web_fetch", "config": { "timeout_ms": 30000 } },
+      { "ref": "session_file_system" }
+    ]
+  }'
+```
+
+### Update multiple fields
+
+```bash
+curl -X PATCH https://api.everruns.com/v1/sessions/session_01234567-89ab-cdef-0123-456789abcdef \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Updated Session",
+    "tags": ["updated", "v2"],
+    "model_id": "gpt-4o-mini"
+  }'
+```
+
+## Error Responses
+
+- `404 Not Found` - Session does not exist or is not accessible
+- `400 Bad Request` - Invalid request body or parameters
+- `401 Unauthorized` - Missing or invalid authentication
+
+## Notes
+
+- This endpoint uses PATCH semantics: only provided fields are updated
+- The `agent_id` cannot be changed after session creation
+- Updating `capabilities` replaces the entire session capabilities array
+- Updating `tags` replaces the entire tags array
+- Session capabilities are always additive to agent capabilities

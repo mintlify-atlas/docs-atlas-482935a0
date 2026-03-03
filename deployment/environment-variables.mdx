@@ -1,0 +1,472 @@
+---
+title: Environment Variables
+description: Complete reference for all Everruns environment variables
+---
+
+This page documents all environment variables used to configure the Everruns server and worker.
+
+## Database
+
+<ParamField path="DATABASE_URL" type="string" required>
+  PostgreSQL connection string.
+  
+  **Format**: `postgres://user:password@host:port/database[?options]`
+  
+  **Local development**:
+  ```
+  DATABASE_URL=postgres://everruns:everruns@localhost:5432/everruns
+  ```
+  
+  **Production with TLS**:
+  ```
+  DATABASE_URL=postgres://user:pass@host:5432/db?sslmode=require
+  ```
+</ParamField>
+
+<ParamField path="DATABASE_POOL_MAX" type="number" default="20">
+  Maximum database connections per server instance.
+  
+  For multi-instance deployments, ensure:
+  ```
+  DATABASE_POOL_MAX × EXPECTED_INSTANCES < postgres max_connections
+  ```
+  
+  A startup warning fires if pool × instances exceeds 80% of PostgreSQL's `max_connections` (default 100).
+</ParamField>
+
+<ParamField path="PG_MAX_CONNECTIONS" type="number" default="100">
+  Expected PostgreSQL max_connections limit. Used to validate connection pool sizing in multi-instance deployments.
+</ParamField>
+
+## Encryption
+
+<ParamField path="SECRETS_ENCRYPTION_KEY" type="string" required>
+  Primary encryption key for protecting API keys stored in the database.
+  
+  **Format**: `<key_id>:<base64_key>` where key is 32 bytes, base64-encoded
+  
+  **Generate**:
+  ```bash
+  python3 -c "import os, base64; print('kek-v1:' + base64.b64encode(os.urandom(32)).decode())"
+  ```
+  
+  **Example**: `kek-v1:8B3uCQ4Znx45hl5nB+PKVriRrj/KtEVM+wBZ2VGa9vY=`
+  
+  Uses AES-256-GCM envelope encryption with DEK (Data Encryption Key) wrapped by this KEK (Key Encryption Key).
+</ParamField>
+
+<ParamField path="SECRETS_ENCRYPTION_KEY_PREVIOUS" type="string">
+  Previous encryption key for key rotation.
+  
+  During rotation:
+  1. Set new key as `SECRETS_ENCRYPTION_KEY`
+  2. Move old key to `SECRETS_ENCRYPTION_KEY_PREVIOUS`
+  3. Deploy with both keys configured
+  4. Background re-encryption migrates data to new key
+  5. Remove old key after re-encryption completes
+  
+  Same format as `SECRETS_ENCRYPTION_KEY`.
+</ParamField>
+
+## Worker Configuration
+
+<ParamField path="WORKER_GRPC_ADDRESS" type="string" default="127.0.0.1:9001">
+  gRPC server address for worker-to-server communication.
+  
+  **Worker setting** - specifies where workers connect to the control plane.
+  
+  **Docker Compose**: Use service name
+  ```
+  WORKER_GRPC_ADDRESS=server:9001
+  ```
+  
+  **External workers**:
+  ```
+  WORKER_GRPC_ADDRESS=control-plane.example.com:9001
+  ```
+</ParamField>
+
+<ParamField path="WORKER_GRPC_AUTH_TOKEN" type="string">
+  Bearer token for worker gRPC authentication.
+  
+  **Required in production** to prevent unauthorized workers from connecting.
+  
+  Generate a secure random token:
+  ```bash
+  openssl rand -base64 32
+  ```
+  
+  Must match on both server and all workers.
+</ParamField>
+
+### Worker gRPC Mutual TLS (mTLS)
+
+Optional mutual TLS for encrypted and authenticated worker-server communication.
+
+<ParamField path="WORKER_GRPC_TLS_CERT" type="string">
+  Path to TLS certificate file (PEM format).
+  
+  **Server**: Enables TLS on gRPC listener (port 9001)
+  
+  **Worker**: Client certificate for mTLS authentication
+</ParamField>
+
+<ParamField path="WORKER_GRPC_TLS_KEY" type="string">
+  Path to TLS private key file (PEM format).
+  
+  Used with `WORKER_GRPC_TLS_CERT`.
+</ParamField>
+
+<ParamField path="WORKER_GRPC_TLS_CA_CERT" type="string">
+  Path to CA certificate for verification (PEM format).
+  
+  **Server**: Enables client certificate verification (mTLS)
+  
+  **Worker**: Verifies server certificate
+</ParamField>
+
+<ParamField path="WORKER_GRPC_TLS_DOMAIN" type="string">
+  Expected server domain name for certificate verification.
+  
+  **Worker setting** - validates server certificate matches this domain.
+</ParamField>
+
+## Server Configuration
+
+<ParamField path="HOST" type="string" default="127.0.0.1">
+  HTTP server bind address.
+  
+  **Production**: Use `0.0.0.0` to listen on all interfaces
+  ```
+  HOST=0.0.0.0
+  ```
+</ParamField>
+
+<ParamField path="PORT" type="string" default="9000">
+  HTTP server port for REST API.
+</ParamField>
+
+<ParamField path="GRPC_PORT" type="string" default="9001">
+  gRPC server port for worker communication.
+</ParamField>
+
+### HTTP/2 Flow Control
+
+Critical for high-concurrency SSE (Server-Sent Events) streaming.
+
+<ParamField path="HTTP2_STREAM_WINDOW_SIZE" type="number" default="2097152">
+  Per-stream flow control window (bytes).
+  
+  Default: 2 MB (2,097,152 bytes)
+  
+  Increase for high-throughput event streams. The default 65 KB exhausts under many slow-reading clients.
+</ParamField>
+
+<ParamField path="HTTP2_CONNECTION_WINDOW_SIZE" type="number" default="16777216">
+  Per-connection flow control window (bytes).
+  
+  Default: 16 MB (16,777,216 bytes)
+</ParamField>
+
+<ParamField path="HTTP2_MAX_CONCURRENT_STREAMS" type="number" default="256">
+  Maximum concurrent HTTP/2 streams per connection.
+</ParamField>
+
+## Authentication
+
+See [Authentication](/deployment/authentication) for detailed configuration.
+
+<ParamField path="AUTH_MODE" type="string" default="none">
+  Authentication mode.
+  
+  **Options**:
+  - `none` - No authentication (anonymous user)
+  - `admin` - Single admin user via env vars
+  - `full` - User registration + OAuth
+  - `external` - Third-party auth provider (PropelAuth, Auth0, etc.)
+</ParamField>
+
+<ParamField path="AUTH_JWT_SECRET" type="string">
+  JWT signing secret (required for `admin` and `full` modes).
+  
+  Minimum 32 bytes recommended:
+  ```bash
+  openssl rand -base64 32
+  ```
+</ParamField>
+
+<ParamField path="AUTH_BASE_URL" type="string">
+  Base URL for OAuth callbacks.
+  
+  Include path prefix if behind reverse proxy:
+  ```
+  AUTH_BASE_URL=http://localhost:9300/api
+  ```
+</ParamField>
+
+<ParamField path="AUTH_ADMIN_EMAIL" type="string">
+  Admin user email (`admin` mode only).
+</ParamField>
+
+<ParamField path="AUTH_ADMIN_PASSWORD" type="string">
+  Admin user password (`admin` mode only).
+</ParamField>
+
+<ParamField path="AUTH_JWT_ACCESS_TOKEN_LIFETIME" type="number" default="900">
+  Access token lifetime in seconds.
+  
+  Default: 900 seconds (15 minutes)
+</ParamField>
+
+<ParamField path="AUTH_JWT_REFRESH_TOKEN_LIFETIME" type="number" default="2592000">
+  Refresh token lifetime in seconds.
+  
+  Default: 2,592,000 seconds (30 days)
+</ParamField>
+
+<ParamField path="AUTH_DISABLE_PASSWORD" type="boolean" default="false">
+  Disable password authentication (OAuth only).
+</ParamField>
+
+<ParamField path="AUTH_DISABLE_SIGNUP" type="boolean" default="false">
+  Disable user registration.
+</ParamField>
+
+### OAuth Providers
+
+<ParamField path="AUTH_GOOGLE_CLIENT_ID" type="string">
+  Google OAuth client ID.
+</ParamField>
+
+<ParamField path="AUTH_GOOGLE_CLIENT_SECRET" type="string">
+  Google OAuth client secret.
+</ParamField>
+
+<ParamField path="AUTH_GOOGLE_REDIRECT_URI" type="string">
+  Google OAuth redirect URI.
+  
+  Default: `{AUTH_BASE_URL}/v1/auth/callback/google`
+</ParamField>
+
+<ParamField path="AUTH_GOOGLE_ALLOWED_DOMAINS" type="string">
+  Comma-separated allowed email domains for Google OAuth.
+  
+  Example: `example.com,partner.com`
+</ParamField>
+
+<ParamField path="AUTH_GITHUB_CLIENT_ID" type="string">
+  GitHub OAuth client ID.
+</ParamField>
+
+<ParamField path="AUTH_GITHUB_CLIENT_SECRET" type="string">
+  GitHub OAuth client secret.
+</ParamField>
+
+<ParamField path="AUTH_GITHUB_REDIRECT_URI" type="string">
+  GitHub OAuth redirect URI.
+  
+  Default: `{AUTH_BASE_URL}/v1/auth/callback/github`
+</ParamField>
+
+### User Connections
+
+Separate OAuth apps for GitHub/GitLab repository access (not for login).
+
+<ParamField path="GITHUB_CONNECTION_CLIENT_ID" type="string">
+  GitHub OAuth App client ID for repository connections.
+</ParamField>
+
+<ParamField path="GITHUB_CONNECTION_CLIENT_SECRET" type="string">
+  GitHub OAuth App client secret for repository connections.
+</ParamField>
+
+<ParamField path="GITHUB_CONNECTION_REDIRECT_URI" type="string">
+  GitHub connection callback URL.
+  
+  Default: `{AUTH_BASE_URL}/v1/user/connections/github/callback`
+</ParamField>
+
+## CORS
+
+<ParamField path="CORS_ALLOWED_ORIGINS" type="string">
+  Comma-separated allowed CORS origins.
+  
+  Only required if frontend is on different origin than API.
+  
+  Example:
+  ```
+  CORS_ALLOWED_ORIGINS=https://app.example.com,https://staging.example.com
+  ```
+</ParamField>
+
+## Observability
+
+### OpenTelemetry
+
+<ParamField path="OTEL_EXPORTER_OTLP_ENDPOINT" type="string">
+  OTLP endpoint for distributed tracing.
+  
+  **Local Jaeger**:
+  ```
+  OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+  ```
+  
+  Enables OpenTelemetry tracing with Gen-AI semantic conventions for LLM operations.
+</ParamField>
+
+<ParamField path="OTEL_SERVICE_NAME" type="string" default="everruns">
+  Service name for traces.
+</ParamField>
+
+<ParamField path="OTEL_ENVIRONMENT" type="string">
+  Deployment environment label (e.g., `production`, `staging`, `development`).
+</ParamField>
+
+### Braintrust
+
+Optional LLM observability platform integration.
+
+<ParamField path="BRAINTRUST_API_KEY" type="string">
+  Braintrust API key. Setting this enables Braintrust integration.
+</ParamField>
+
+<ParamField path="BRAINTRUST_PROJECT_NAME" type="string">
+  Braintrust project name.
+</ParamField>
+
+<ParamField path="BRAINTRUST_PROJECT_ID" type="string">
+  Braintrust project ID (alternative to project name, skips name resolution API call).
+</ParamField>
+
+<ParamField path="BRAINTRUST_API_URL" type="string" default="https://api.braintrust.dev">
+  Braintrust API URL.
+</ParamField>
+
+## Logging
+
+<ParamField path="RUST_LOG" type="string" default="info">
+  Rust logging level.
+  
+  **Levels**: `error`, `warn`, `info`, `debug`, `trace`
+  
+  **Module-specific**:
+  ```
+  RUST_LOG=info,everruns_server=debug,sqlx=warn
+  ```
+</ParamField>
+
+## Multi-Instance Deployment
+
+<ParamField path="EXPECTED_INSTANCES" type="number" default="1">
+  Total number of server instances in deployment.
+  
+  Used for:
+  - SSE connection limits (global and per-org limits divided by N)
+  - Database pool size validation
+  - Metrics aggregation
+  
+  See [Multi-Instance Deployment](/deployment/multi-instance) for details.
+</ParamField>
+
+## Development Mode
+
+<ParamField path="DEV_MODE" type="boolean" default="false">
+  Enable development mode with in-memory storage.
+  
+  **Dev mode behavior**:
+  - No PostgreSQL required
+  - In-memory storage (data lost on restart)
+  - In-process worker execution
+  - gRPC server disabled
+  - No migrations
+  
+  **Usage**:
+  ```bash
+  DEV_MODE=true cargo run -p everruns-server
+  ```
+  
+  Not suitable for production.
+</ParamField>
+
+## Default LLM Provider Keys
+
+These are fallback API keys. The recommended approach is to configure providers via the UI (Settings > Providers), which stores encrypted keys in the database.
+
+<ParamField path="DEFAULT_OPENAI_API_KEY" type="string">
+  Default OpenAI API key.
+  
+  Format: `sk-...`
+</ParamField>
+
+<ParamField path="DEFAULT_ANTHROPIC_API_KEY" type="string">
+  Default Anthropic API key.
+  
+  Format: `sk-ant-...`
+</ParamField>
+
+<ParamField path="DEFAULT_GEMINI_API_KEY" type="string">
+  Default Google Gemini API key.
+</ParamField>
+
+## Testing
+
+<ParamField path="SKIP_LLM_INTEGRATION_TESTS_PROVIDERS" type="string">
+  Comma-separated LLM providers to skip in integration tests.
+  
+  Useful when API keys are set but inaccessible from test environment.
+  
+  Example:
+  ```
+  SKIP_LLM_INTEGRATION_TESTS_PROVIDERS=gemini,openai
+  ```
+</ParamField>
+
+## Startup Options
+
+### Disable Migrations
+
+Migrations auto-apply on server startup. To disable:
+
+```bash
+everruns-server --no-migrations
+```
+
+Or in Docker:
+
+```yaml
+server:
+  command: ["--no-migrations"]
+```
+
+## Environment File Example
+
+Here's a complete `.env.example` from the repository:
+
+```bash
+# Database
+DATABASE_URL=postgres://everruns:everruns@localhost:5432/everruns
+
+# Encryption (required)
+SECRETS_ENCRYPTION_KEY=kek-v1:8B3uCQ4Znx45hl5nB+PKVriRrj/KtEVM+wBZ2VGa9vY=
+
+# Worker gRPC
+WORKER_GRPC_ADDRESS=127.0.0.1:9001
+WORKER_GRPC_AUTH_TOKEN=your-secret-token
+
+# Authentication (Admin Mode)
+AUTH_MODE=admin
+AUTH_JWT_SECRET=MJ5SiIlm9mTmiVJV8O2NLrxnuEZDFuO/iXkjVXGqWD0=
+AUTH_ADMIN_EMAIL=admin@example.com
+AUTH_ADMIN_PASSWORD=changeme
+
+# OpenTelemetry (optional)
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+OTEL_SERVICE_NAME=everruns
+OTEL_ENVIRONMENT=development
+```
+
+## Next Steps
+
+- [Docker Compose deployment](/deployment/docker-compose)
+- [Authentication configuration](/deployment/authentication)
+- [Multi-instance setup](/deployment/multi-instance)

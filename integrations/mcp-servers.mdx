@@ -1,0 +1,356 @@
+---
+title: MCP Servers
+description: Integrate Model Context Protocol servers to extend agent capabilities
+---
+
+MCP (Model Context Protocol) servers extend agent capabilities by providing external tools through a standardized protocol. MCP servers appear as "virtual capabilities" alongside built-in capabilities.
+
+## Overview
+
+MCP integration enables:
+- **External tools** - Agents can use tools from remote MCP servers
+- **Virtual capabilities** - MCP servers appear in the capability selector
+- **Tool discovery** - Automatic caching of available tools (24h TTL)
+- **HTTP transport** - Streamable HTTP protocol support
+
+## Supported Transport
+
+Currently supported:
+- **HTTP** - Streamable HTTP transport (JSON-RPC over HTTP)
+
+Future support planned:
+- `stdio` - Local process communication
+- `websocket` - WebSocket-based transport
+
+## Adding an MCP Server
+
+<Steps>
+  <Step title="Create MCP server configuration">
+    ```bash
+    curl -X POST https://api.everruns.com/v1/mcp-servers \
+      -H "Authorization: Bearer YOUR_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "name": "microsoft_learn",
+        "description": "Microsoft Learn documentation server",
+        "url": "https://learn.microsoft.com/api/mcp",
+        "transport_type": "http",
+        "api_key": "optional-api-key",
+        "headers": {
+          "X-Custom-Header": "value"
+        }
+      }'
+    ```
+
+    **Fields:**
+    - `name` - Unique server name (used as tool prefix, snake_case recommended)
+    - `url` - Server endpoint URL
+    - `transport_type` - `"http"` (only supported type)
+    - `api_key` - Optional API key for authentication
+    - `headers` - Additional HTTP headers
+  </Step>
+
+  <Step title="Enable on agent">
+    MCP servers appear as capabilities with ID format `mcp:{server_uuid}`:
+
+    ```bash
+    curl -X PATCH https://api.everruns.com/v1/agents/{agent_id} \
+      -H "Authorization: Bearer YOUR_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "capabilities": [
+          {"ref": "mcp:01933b5a-0000-7000-8000-000000000501"}
+        ]
+      }'
+    ```
+
+    The agent can now use tools from the MCP server.
+  </Step>
+
+  <Step title="Verify tool discovery">
+    Tools are automatically discovered and cached when the server is enabled:
+
+    ```bash
+    curl https://api.everruns.com/v1/mcp-servers/{server_id} \
+      -H "Authorization: Bearer YOUR_TOKEN"
+    ```
+
+    Response includes `cached_tools` and `tools_cached_at`.
+  </Step>
+</Steps>
+
+## Tool Discovery
+
+MCP servers expose tools via the `tools/list` JSON-RPC method:
+
+**Request:**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/list"
+}
+```
+
+**Response:**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "tools": [
+      {
+        "name": "search",
+        "description": "Search for content",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {"type": "string"}
+          }
+        }
+      }
+    ]
+  }
+}
+```
+
+### Tool Caching
+
+Tools are cached with a hybrid strategy:
+- **TTL**: 24 hours
+- **On-demand refresh**: Fetched on first access or when stale
+- **Background refresh**: For frequently used servers
+- **Force refresh**: Available via API
+
+## Tool Name Format
+
+MCP tools use a double-underscore separator to avoid conflicts:
+
+```
+mcp_{server_name}__{tool_name}
+```
+
+**Examples:**
+
+| Server | Tool | Full Tool Name |
+|--------|------|----------------|
+| `github` | `search_repos` | `mcp_github__search_repos` |
+| `microsoft_learn` | `search` | `mcp_microsoft_learn__search` |
+| `atlassian_jira` | `create_issue` | `mcp_atlassian_jira__create_issue` |
+
+<Note>
+  **Why double underscore?** Server names can contain underscores (e.g., `microsoft_learn`), so a single underscore would be ambiguous.
+</Note>
+
+## Tool Execution
+
+Tools are executed via the `tools/call` JSON-RPC method:
+
+**Request:**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "search",
+    "arguments": {
+      "query": "Azure functions"
+    }
+  }
+}
+```
+
+**Response (plain JSON):**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "Search results..."
+      }
+    ],
+    "isError": false
+  }
+}
+```
+
+**Response (Server-Sent Events):**
+
+Some servers return responses in SSE format:
+```
+event: message
+data: {"jsonrpc":"2.0","id":1,"result":{"content":[...],"isError":false}}
+```
+
+Everruns automatically detects and parses both formats.
+
+## Content Types
+
+MCP tool results can contain:
+
+| Type | Fields | Description |
+|------|--------|-------------|
+| `text` | `text` | Plain text content |
+| `image` | `data`, `mime_type` | Base64-encoded image |
+| `resource` | `uri`, `mime_type`, `text` | External resource reference |
+
+### Image Handling
+
+Images returned by MCP tools are:
+1. Extracted from the JSON response
+2. Converted to `ToolResultImage`
+3. Sent to the LLM as native image content blocks
+
+This enables the LLM to visually analyze images returned by MCP tools.
+
+**Example tool result:**
+```json
+{
+  "result": "Found 2 diagrams",
+  "images": [
+    {
+      "mime_type": "image/png",
+      "data": "iVBORw0KGgo..."
+    }
+  ]
+}
+```
+
+## Authentication
+
+### API Key
+
+For API key authentication:
+
+```json
+{
+  "api_key": "your-api-key"
+}
+```
+
+The API key is:
+- Encrypted at rest (AES-256-GCM)
+- Never exposed in API responses (`api_key_set: true` indicator only)
+- Sent as `Authorization: Bearer <key>` header
+
+### Custom Headers
+
+For custom authentication schemes:
+
+```json
+{
+  "headers": {
+    "X-API-Key": "your-key",
+    "X-Custom-Auth": "token"
+  }
+}
+```
+
+Headers are stored in plain text and sent with every request.
+
+## MCP as Virtual Capabilities
+
+MCP servers integrate into the capability system:
+
+**Capability properties:**
+- **ID**: `mcp:{server_uuid}` (e.g., `mcp:01933b5a-0000-7000-8000-000000000501`)
+- **Name**: Server name
+- **Description**: Server description
+- **Icon**: `plug` (hardcoded)
+- **Category**: `MCP Servers`
+- **Badge**: "MCP" badge in UI
+
+**Key differences from built-in capabilities:**
+
+| Aspect | Built-in | MCP |
+|--------|----------|-----|
+| Source | Rust code | Remote server |
+| ID format | `snake_case` | `mcp:{uuid}` |
+| Tool prefix | None | `mcp_{server}__` |
+| Discovery | Compile-time | Runtime (cached, 24h TTL) |
+| Execution | In-process | HTTP JSON-RPC |
+| Dependencies | Supported | Not supported |
+
+## Pre-configured Servers
+
+Everruns seeds the following MCP server:
+
+<Tabs>
+  <Tab title="Microsoft Learn">
+    **Name:** `microsoft_learn`
+
+    **URL:** `https://learn.microsoft.com/api/mcp`
+
+    **Description:** Microsoft Learn documentation server
+
+    **Tools:**
+    - `search` - Search Microsoft Learn documentation
+
+    A demo agent "Microsoft Learn Assistant" is pre-configured to use this server.
+  </Tab>
+</Tabs>
+
+## Server Status
+
+Servers can be:
+- **Active** - Tools are available for use
+- **Disabled** - Server is hidden, tools unavailable
+
+Disable a server:
+```bash
+curl -X PATCH https://api.everruns.com/v1/mcp-servers/{server_id} \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"status": "disabled"}'
+```
+
+## Error Handling
+
+| Scenario | Response |
+|----------|----------|
+| Invalid tool name format | `400 Bad Request` |
+| MCP server not found | `404 Not Found` |
+| MCP server unreachable | `502 Bad Gateway` (timeout after 60s) |
+| MCP tool returns error | Success with `{"error": "message"}` in result |
+| JSON-RPC error | Error propagated with code and message |
+
+## Validation Limits
+
+| Field | Max Size | Notes |
+|-------|----------|-------|
+| `name` | 255 chars | Must be unique, non-empty |
+| `description` | 10 KB | Optional |
+| `url` | 2 KB | Valid HTTP/HTTPS URL |
+| `headers` | 100 entries | Maximum header count |
+
+## LLM Provider Compatibility
+
+### Anthropic
+
+- Text content blocks must be non-empty (API rejects empty strings)
+- Assistant messages with tool calls but empty text are valid
+- Empty text blocks are automatically filtered
+
+### OpenAI
+
+- Empty text content is allowed
+- No special filtering required
+
+## Security Considerations
+
+- **API Key Encryption**: API keys encrypted at rest (TM-LLM-001)
+- **HTTPS Required**: All MCP communication over HTTPS (TM-LLM-006)
+- **Prompt Injection**: Tool descriptions fed to LLM can influence behavior (TM-AGENT-003, accepted risk)
+- **Tool Results**: Results use `tool_result` role, but LLM may still follow adversarial content (TM-AGENT-002, accepted risk)
+
+See [Threat Model](/security/threat-model) for full analysis.
+
+## Next Steps
+
+- [Build an MCP server](https://modelcontextprotocol.io/) - Official MCP documentation
+- [Create agents](/guides/agents) - Use MCP tools in your agents
+- [Tool execution](/concepts/tools) - How tools are executed

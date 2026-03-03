@@ -1,0 +1,383 @@
+---
+title: Error Handling
+description: API error response format and status codes
+---
+
+The Everruns API uses standard HTTP status codes to indicate the success or failure of requests. All error responses follow a consistent JSON format.
+
+## Error Response Format
+
+When an error occurs, the API returns a JSON response with the following structure:
+
+```json
+{
+  "error": "Error message",
+  "status": 400
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `error` | string | Human-readable error message |
+| `status` | integer | HTTP status code |
+
+**Example:**
+
+```json
+{
+  "error": "Agent not found",
+  "status": 404
+}
+```
+
+## HTTP Status Codes
+
+The API uses the following standard HTTP status codes:
+
+### 400 Bad Request
+
+The request is malformed or contains invalid parameters.
+
+**Common causes:**
+- Invalid JSON in request body
+- Missing required fields
+- Invalid field values
+- Input exceeds size limits
+
+**Example:**
+
+```bash
+POST /v1/agents
+{
+  "name": ""  # Empty name not allowed
+}
+```
+
+```json
+{
+  "error": "Invalid request",
+  "status": 400
+}
+```
+
+<Note>
+Input validation errors return generic messages for security. Check server logs for detailed validation failures.
+</Note>
+
+### 401 Unauthorized
+
+Authentication is required or the provided credentials are invalid.
+
+**Common causes:**
+- Missing `Authorization` header
+- Invalid or expired access token
+- Invalid API key
+
+**Example:**
+
+```bash
+GET /v1/agents
+# No Authorization header
+```
+
+```json
+{
+  "error": "Unauthorized",
+  "status": 401
+}
+```
+
+**Resolution:**
+- Include valid authentication credentials
+- Refresh expired access tokens using `POST /v1/auth/refresh`
+- Check that your API key is correct and not expired
+
+### 403 Forbidden
+
+The request is authenticated but the user lacks permission to perform the action.
+
+**Common causes:**
+- Insufficient role permissions
+- Attempting to access resources from another organization
+- Attempting to perform admin-only actions without admin role
+
+**Example:**
+
+```bash
+DELETE /v1/llm-providers/{id}
+# Non-admin user attempting admin action
+```
+
+```json
+{
+  "error": "Forbidden",
+  "status": 403
+}
+```
+
+### 404 Not Found
+
+The requested resource does not exist.
+
+**Common causes:**
+- Invalid resource ID
+- Resource has been deleted
+- Typo in endpoint URL
+
+**Example:**
+
+```bash
+GET /v1/agents/agent_00000000-0000-0000-0000-000000000000
+```
+
+```json
+{
+  "error": "Not found",
+  "status": 404
+}
+```
+
+### 422 Unprocessable Entity
+
+The request is well-formed but contains semantic errors.
+
+**Common causes:**
+- Business logic validation failures
+- Invalid state transitions
+- Conflicting data
+
+**Example:**
+
+```bash
+POST /v1/sessions/{session_id}/cancel
+# Session is not active
+```
+
+```json
+{
+  "error": "Cannot cancel session: session is not active",
+  "status": 422
+}
+```
+
+### 500 Internal Server Error
+
+An unexpected error occurred on the server.
+
+**Response:**
+
+```json
+{
+  "error": "Internal server error",
+  "status": 500
+}
+```
+
+<Note>
+Internal errors never expose implementation details. All error information is logged server-side for debugging.
+</Note>
+
+## Error Handling Best Practices
+
+### Check Status Codes
+
+Always check the HTTP status code to determine the type of error:
+
+```javascript
+const response = await fetch('https://api.example.com/v1/agents', {
+  headers: {
+    'Authorization': `Bearer ${token}`
+  }
+});
+
+if (!response.ok) {
+  const error = await response.json();
+  
+  switch (error.status) {
+    case 401:
+      // Refresh token or redirect to login
+      break;
+    case 404:
+      // Show "not found" message
+      break;
+    case 500:
+      // Show generic error, report to monitoring
+      break;
+    default:
+      // Handle other errors
+  }
+}
+```
+
+### Implement Retry Logic
+
+For `500` errors and network failures, implement exponential backoff:
+
+```javascript
+async function fetchWithRetry(url, options, maxRetries = 3) {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      const response = await fetch(url, options);
+      
+      if (response.ok || response.status < 500) {
+        return response;
+      }
+      
+      // Wait before retrying (exponential backoff)
+      await new Promise(resolve => 
+        setTimeout(resolve, Math.pow(2, i) * 1000)
+      );
+    } catch (error) {
+      if (i === maxRetries - 1) throw error;
+    }
+  }
+}
+```
+
+### Handle Token Expiration
+
+Automatically refresh tokens when receiving `401` responses:
+
+```javascript
+async function apiRequest(url, options) {
+  let response = await fetch(url, options);
+  
+  if (response.status === 401) {
+    // Attempt to refresh token
+    const refreshed = await refreshAccessToken();
+    
+    if (refreshed) {
+      // Retry with new token
+      options.headers.Authorization = `Bearer ${newToken}`;
+      response = await fetch(url, options);
+    }
+  }
+  
+  return response;
+}
+```
+
+### Log Errors Appropriately
+
+Log different error types with appropriate severity:
+
+```javascript
+const error = await response.json();
+
+switch (error.status) {
+  case 400:
+  case 404:
+    // Client errors - log as warnings
+    console.warn('Client error:', error.error);
+    break;
+    
+  case 500:
+    // Server errors - log as errors and report
+    console.error('Server error:', error.error);
+    reportToMonitoring(error);
+    break;
+}
+```
+
+## Common Error Scenarios
+
+### Invalid Agent ID
+
+```bash
+GET /v1/agents/invalid-id
+```
+
+```json
+{
+  "error": "Not found",
+  "status": 404
+}
+```
+
+### Missing Required Field
+
+```bash
+POST /v1/agents
+{
+  "system_prompt": "You are helpful."
+  # Missing required "name" field
+}
+```
+
+```json
+{
+  "error": "Invalid request",
+  "status": 400
+}
+```
+
+### Expired Access Token
+
+```bash
+GET /v1/agents
+Authorization: Bearer <expired_token>
+```
+
+```json
+{
+  "error": "Unauthorized",
+  "status": 401
+}
+```
+
+**Resolution:** Use `POST /v1/auth/refresh` to obtain a new token pair.
+
+### Input Size Limit Exceeded
+
+```bash
+POST /v1/agents
+{
+  "name": "Agent",
+  "system_prompt": "<extremely long prompt exceeding limits>"
+}
+```
+
+```json
+{
+  "error": "Input exceeds allowed limits",
+  "status": 400
+}
+```
+
+### Invalid Session State
+
+```bash
+POST /v1/sessions/{session_id}/cancel
+# Session is idle, not active
+```
+
+```json
+{
+  "error": "Cannot cancel session: session is not active",
+  "status": 422
+}
+```
+
+## Security Considerations
+
+### Error Message Safety
+
+The API follows these security principles for error messages:
+
+1. **Never expose internal details** - Stack traces and implementation details are never returned
+2. **Generic messages for server errors** - 500 errors always return "Internal server error"
+3. **Safe user-facing messages** - Only safe, actionable messages are returned to clients
+4. **Server-side logging** - All errors are logged server-side with full context
+
+### Avoiding Information Disclosure
+
+The API avoids exposing sensitive information through error messages:
+
+- User existence is not disclosed through authentication errors
+- Database schema details are never revealed
+- File paths and system information are not included
+- Validation errors use generic messages
+
+<Note>
+For detailed debugging information, always check server logs. Error responses are intentionally generic for security.
+</Note>

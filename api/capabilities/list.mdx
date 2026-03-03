@@ -1,0 +1,271 @@
+---
+title: "List Capabilities"
+description: "Get all available capabilities"
+---
+
+## GET /v1/capabilities
+
+List all available capabilities that can be enabled on agents. Capabilities provide tools, system prompt additions, and behavior modifications.
+
+### Response
+
+<ResponseField name="items" type="array">
+  Array of capability objects
+  
+  <ResponseField name="items[].id" type="string">
+    Capability identifier. Format:
+    - Built-in: `snake_case` (e.g., `current_time`, `web_fetch`)
+    - MCP: `mcp:{server_uuid}` (e.g., `mcp:01933b5a-0000-7000-8000-000000000501`)
+  </ResponseField>
+  
+  <ResponseField name="items[].name" type="string">
+    Display name
+  </ResponseField>
+  
+  <ResponseField name="items[].description" type="string">
+    Description of functionality (supports GitHub Flavored Markdown)
+  </ResponseField>
+  
+  <ResponseField name="items[].status" type="string">
+    Availability status: `available`, `experimental`, `deprecated`
+  </ResponseField>
+  
+  <ResponseField name="items[].icon" type="string">
+    Icon name for UI rendering
+  </ResponseField>
+  
+  <ResponseField name="items[].category" type="string">
+    Category for grouping in UI (e.g., "Utilities", "Data", "MCP Servers")
+  </ResponseField>
+  
+  <ResponseField name="items[].is_mcp" type="boolean">
+    `true` if this is an MCP virtual capability
+  </ResponseField>
+  
+  <ResponseField name="items[].dependencies" type="array">
+    IDs of capabilities this capability depends on
+  </ResponseField>
+  
+  <ResponseField name="items[].features" type="array">
+    UI feature strings this capability contributes to (e.g., `file_system`, `secrets`)
+  </ResponseField>
+  
+  <ResponseField name="items[].risk_level" type="string">
+    Risk classification: `low` (default, omitted), `medium`, `high`
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="total" type="integer">
+  Total number of capabilities
+</ResponseField>
+
+### Example Request
+
+```bash
+curl https://api.everruns.com/v1/capabilities \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+### Example Response
+
+```json
+{
+  "items": [
+    {
+      "id": "current_time",
+      "name": "Current Time",
+      "description": "Tool to get current date and time",
+      "status": "available",
+      "icon": "clock",
+      "category": "Utilities",
+      "is_mcp": false,
+      "dependencies": [],
+      "features": []
+    },
+    {
+      "id": "web_fetch",
+      "name": "Web Fetch",
+      "description": "Fetch content from URLs and convert HTML to markdown.\n\n> [!TIP]\n> Use `as_markdown: true` for better readability when fetching HTML pages.\n\n> [!WARNING]\n> Binary content (images, PDFs) cannot be fetched as text. Only metadata is returned.",
+      "status": "available",
+      "icon": "globe",
+      "category": "Network",
+      "is_mcp": false,
+      "dependencies": [],
+      "features": [],
+      "risk_level": "high"
+    },
+    {
+      "id": "session_file_system",
+      "name": "Session File System",
+      "description": "Tools to access and manipulate files in the session workspace",
+      "status": "available",
+      "icon": "folder",
+      "category": "File System",
+      "is_mcp": false,
+      "dependencies": [],
+      "features": ["file_system"]
+    },
+    {
+      "id": "virtual_bash",
+      "name": "Virtual Bash",
+      "description": "Sandboxed bash shell execution for safe code execution",
+      "status": "available",
+      "icon": "terminal",
+      "category": "Development",
+      "is_mcp": false,
+      "dependencies": ["session_file_system"],
+      "features": ["file_system"],
+      "risk_level": "high"
+    },
+    {
+      "id": "sample_data",
+      "name": "Sample Data",
+      "description": "Sample data files for demonstration",
+      "status": "available",
+      "icon": "database",
+      "category": "Data",
+      "is_mcp": false,
+      "dependencies": ["session_file_system"],
+      "features": ["file_system"]
+    },
+    {
+      "id": "mcp:01933b5a-0000-7000-8000-000000000501",
+      "name": "GitHub",
+      "description": "GitHub API integration",
+      "status": "available",
+      "icon": "plug",
+      "category": "MCP Servers",
+      "is_mcp": true,
+      "dependencies": [],
+      "features": []
+    }
+  ],
+  "total": 6
+}
+```
+
+## Capability Types
+
+### Built-in Capabilities
+
+Built-in capabilities are defined in the Everruns codebase and use `snake_case` identifiers:
+
+- `current_time` - Get current date and time
+- `web_fetch` - Fetch content from URLs
+- `session_file_system` - File operations in session workspace
+- `virtual_bash` - Sandboxed bash shell
+- `session_storage` - Key/value and secret storage
+- `stateless_todo_list` - Task tracking
+- `sample_data` - Sample data files
+- `skills` - Skills discovery from session VFS
+- `platform_management` - Manage harnesses, agents, sessions
+
+### MCP Virtual Capabilities
+
+MCP servers are exposed as "virtual capabilities" with IDs in the format `mcp:{server_uuid}`. They appear alongside built-in capabilities in the UI but:
+
+- Tools are prefixed with `mcp_{server_name}__`
+- Availability depends on server status
+- No system prompt additions or dependencies
+- Display an "MCP" badge in the UI
+
+## Capability Dependencies
+
+Capabilities can depend on other capabilities. When a capability is selected:
+
+1. Dependencies are automatically resolved and applied
+2. Dependencies are always applied before dependents (topological order)
+3. Only user-selected capabilities are stored; dependencies are resolved at runtime
+4. Users cannot remove a capability required by other selected capabilities
+
+**Example:** `virtual_bash` depends on `session_file_system`. Selecting `virtual_bash` automatically enables `session_file_system`.
+
+## Capability Features
+
+Capabilities declare UI features they contribute to. The UI uses these to determine which tabs/sections to render:
+
+| Feature | UI Element |
+|---------|------------|
+| `file_system` | Workspace tab |
+| `secrets` | Storage tab |
+| `key_value` | Storage tab |
+| `schedules` | Schedules tab |
+| `sql_database` | *(reserved)* |
+
+## Risk Levels
+
+Capabilities are classified by risk level:
+
+| Level | Description | Admin Required |
+|-------|-------------|----------------|
+| `low` | Default. No special requirements. | No |
+| `medium` | Logged but allowed for org members. | No |
+| `high` | Can execute arbitrary code or access external resources. | Yes |
+
+High-risk capabilities: `virtual_bash`, `web_fetch`, `docker_container`, `daytona`, `codesandbox`
+
+## Using Capabilities
+
+### Create Agent with Capabilities
+
+```bash
+curl -X POST https://api.everruns.com/v1/agents \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Research Assistant",
+    "system_prompt": "You are a helpful research assistant.",
+    "capabilities": [
+      {"ref": "current_time"},
+      {"ref": "web_fetch"},
+      {"ref": "session_file_system"}
+    ]
+  }'
+```
+
+### Update Agent Capabilities
+
+```bash
+curl -X PATCH https://api.everruns.com/v1/agents/{agent_id} \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "capabilities": [
+      {"ref": "current_time"},
+      {"ref": "web_fetch"},
+      {"ref": "virtual_bash"}
+    ]
+  }'
+```
+
+### Session-Level Capabilities
+
+Capabilities can also be set at the session level, extending the agent's capabilities:
+
+```bash
+curl -X POST https://api.everruns.com/v1/sessions \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent_id": "agent_01234567-...",
+    "capabilities": [
+      {"ref": "web_fetch", "config": {"timeout_ms": 30000}}
+    ]
+  }'
+```
+
+Session capabilities are **additive** to agent capabilities.
+
+## Error Responses
+
+<ResponseField name="error" type="string">
+  Error message
+</ResponseField>
+
+<ResponseField name="status" type="integer">
+  HTTP status code
+</ResponseField>
+
+### Common Errors
+
+- **500 Internal Server Error**: Server error during capability retrieval

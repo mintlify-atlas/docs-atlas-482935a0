@@ -1,0 +1,725 @@
+---
+title: Streaming Events
+description: Real-time event streaming with Server-Sent Events (SSE)
+---
+
+Everruns uses Server-Sent Events (SSE) to stream real-time updates as agents work. This guide covers event types, SSE connection management, and how to build responsive UIs.
+
+## Goal
+
+By the end of this guide, you'll understand:
+- How to connect to SSE streams
+- Key event types and their data structures
+- Event filtering and resumption
+- Connection lifecycle and reconnection
+- How to build real-time UIs with events
+
+## SSE Overview
+
+Server-Sent Events provide a one-way stream of events from the server to the client. Benefits:
+
+- **Real-time updates**: See agent thinking, tool execution, and responses as they happen
+- **Automatic reconnection**: EventSource API handles disconnections
+- **Event filtering**: Subscribe only to events you need
+- **Resumable**: Pick up where you left off with `since_id`
+
+## Connecting to SSE
+
+<Steps>
+
+### Get your session ID
+
+You need an active session to stream events:
+
+```python
+session = client.sessions.create(
+    agent_id="agt_01933b5a",
+    title="Research Task"
+)
+
+print(f"Session: {session.id}")
+```
+
+### Connect to the SSE endpoint
+
+<CodeGroup>
+
+```javascript JavaScript (Browser)
+const sessionId = 'ses_01933b5a';
+const apiKey = 'YOUR_API_KEY';
+
+const eventSource = new EventSource(
+  `https://app.everruns.com/api/v1/sessions/${sessionId}/sse`,
+  {
+    headers: {
+      'Authorization': `Bearer ${apiKey}`
+    }
+  }
+);
+
+// Connection established
+eventSource.addEventListener('connected', (event) => {
+  console.log('SSE connected:', JSON.parse(event.data));
+});
+
+// Listen for specific event types
+eventSource.addEventListener('output.message.delta', (event) => {
+  const data = JSON.parse(event.data);
+  console.log('Agent text:', data.data.delta);
+});
+
+eventSource.addEventListener('turn.completed', (event) => {
+  console.log('Turn finished');
+});
+
+// Handle errors
+eventSource.onerror = (error) => {
+  console.error('SSE error:', error);
+};
+```
+
+```python Python SDK
+for event in client.events.stream(session_id):
+    if event.type == "output.message.delta":
+        print(f"Agent: {event.data.delta}", end="", flush=True)
+    elif event.type == "turn.completed":
+        print("\nTurn finished")
+        break
+```
+
+```bash cURL
+curl -N https://app.everruns.com/api/v1/sessions/ses_01933b5a/sse \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+</CodeGroup>
+
+### Listen for events
+
+Events arrive in this format:
+
+```text
+event: output.message.delta
+data: {"id":"evt_abc","type":"output.message.delta","ts":"2024-01-15T10:30:00.000Z","session_id":"ses_xyz","context":{"turn_id":"turn_123"},"data":{"delta":"Hello","accumulated":"Hello"}}
+
+event: output.message.delta
+data: {"id":"evt_def","type":"output.message.delta","ts":"2024-01-15T10:30:00.100Z","session_id":"ses_xyz","context":{"turn_id":"turn_123"},"data":{"delta":" world","accumulated":"Hello world"}}
+```
+
+The `event` field matches the event `type` in the JSON payload.
+
+</Steps>
+
+## Event Lifecycle
+
+A typical turn produces events in this order:
+
+```
+1. input.message          → User message received
+2. turn.started           → Turn execution begins
+3. session.activated      → Session becomes active
+4. reason.started         → Agent starts thinking (LLM call)
+5. output.message.started → LLM generation starts
+6. output.message.delta   → Streaming text (multiple events)
+7. output.message.delta   → ...
+8. output.message.completed → Agent response finished
+9. reason.completed       → Reasoning phase done
+10. act.started           → Tool execution phase begins (if tools called)
+11. tool.started          → Individual tool starts
+12. tool.completed        → Individual tool finishes
+13. act.completed         → Tool execution phase done
+14. turn.completed        → Turn execution finished
+15. session.idled         → Session returns to idle
+```
+
+Not all events appear in every turn. Tool events only appear when the agent calls tools.
+
+## Key Event Types
+
+### User Input Events
+
+#### input.message
+
+Emitted when a user message is received:
+
+```json
+{
+  "type": "input.message",
+  "session_id": "ses_01933b5a",
+  "context": {},
+  "data": {
+    "message": {
+      "id": "msg_01933b5a",
+      "role": "user",
+      "content": [
+        {"type": "text", "text": "Analyze the sales data"}
+      ],
+      "created_at": "2024-01-15T10:30:00Z"
+    }
+  }
+}
+```
+
+### Agent Output Events
+
+#### output.message.started
+
+LLM generation started. Show a "thinking" indicator:
+
+```json
+{
+  "type": "output.message.started",
+  "context": {"turn_id": "turn_abc"},
+  "data": {
+    "turn_id": "turn_abc",
+    "model": "gpt-4o"
+  }
+}
+```
+
+#### output.message.delta
+
+Streaming text update (batched ~100ms):
+
+```json
+{
+  "type": "output.message.delta",
+  "context": {"turn_id": "turn_abc"},
+  "data": {
+    "turn_id": "turn_abc",
+    "delta": "The data shows ",
+    "accumulated": "The data shows "
+  }
+}
+```
+
+Use `delta` to append text incrementally, or `accumulated` for the full text so far.
+
+#### output.message.completed
+
+Agent response finished:
+
+```json
+{
+  "type": "output.message.completed",
+  "context": {"turn_id": "turn_abc"},
+  "data": {
+    "message": {
+      "id": "msg_01933b5b",
+      "role": "agent",
+      "content": [
+        {"type": "text", "text": "The data shows a 15% increase in Q1 sales."}
+      ],
+      "created_at": "2024-01-15T10:30:02Z"
+    },
+    "metadata": {
+      "model": "gpt-4o",
+      "model_id": "mod_01933b5a",
+      "provider_id": "prv_01933b5a"
+    },
+    "usage": {
+      "input_tokens": 120,
+      "output_tokens": 45
+    }
+  }
+}
+```
+
+### Tool Execution Events
+
+#### tool.started
+
+Tool execution begins:
+
+```json
+{
+  "type": "tool.started",
+  "context": {"turn_id": "turn_abc", "exec_id": "exec_def"},
+  "data": {
+    "tool_call": {
+      "id": "call_123",
+      "name": "read_file",
+      "arguments": {"path": "sales.csv"}
+    },
+    "display_name": "Read File"
+  }
+}
+```
+
+#### tool.completed
+
+Tool execution finished:
+
+```json
+{
+  "type": "tool.completed",
+  "context": {"turn_id": "turn_abc", "exec_id": "exec_def"},
+  "data": {
+    "tool_call_id": "call_123",
+    "tool_name": "read_file",
+    "display_name": "Read File",
+    "success": true,
+    "status": "success",
+    "result": [
+      {"type": "text", "text": "Product,Sales\nWidget A,150\nWidget B,200"}
+    ]
+  }
+}
+```
+
+For failures:
+
+```json
+{
+  "type": "tool.completed",
+  "data": {
+    "tool_call_id": "call_456",
+    "tool_name": "fetch_url",
+    "success": false,
+    "status": "error",
+    "error": "Connection timeout"
+  }
+}
+```
+
+### Turn Lifecycle Events
+
+#### turn.started
+
+```json
+{
+  "type": "turn.started",
+  "context": {"turn_id": "turn_abc"},
+  "data": {
+    "turn_id": "turn_abc",
+    "input_message_id": "msg_01933b5a"
+  }
+}
+```
+
+#### turn.completed
+
+```json
+{
+  "type": "turn.completed",
+  "context": {"turn_id": "turn_abc"},
+  "data": {
+    "turn_id": "turn_abc",
+    "iterations": 2,
+    "duration_ms": 3500
+  }
+}
+```
+
+#### turn.failed
+
+Emitted when turn execution fails:
+
+```json
+{
+  "type": "turn.failed",
+  "context": {"turn_id": "turn_abc"},
+  "data": {
+    "turn_id": "turn_abc",
+    "error": "An error occurred while processing your request.",
+    "error_code": "llm_error"
+  }
+}
+```
+
+Error codes:
+- `llm_error`: LLM API failure (missing key, rate limit, network error)
+- `max_iterations`: Maximum turn iterations exceeded
+
+#### turn.cancelled
+
+Emitted when the user cancels execution:
+
+```json
+{
+  "type": "turn.cancelled",
+  "context": {"turn_id": "turn_abc"},
+  "data": {
+    "turn_id": "turn_abc",
+    "reason": "User requested cancellation",
+    "usage": {
+      "input_tokens": 150,
+      "output_tokens": 30
+    }
+  }
+}
+```
+
+### Session State Events
+
+#### session.activated
+
+```json
+{
+  "type": "session.activated",
+  "context": {"turn_id": "turn_abc"},
+  "data": {
+    "turn_id": "turn_abc",
+    "input_message_id": "msg_01933b5a"
+  }
+}
+```
+
+#### session.idled
+
+Contains cumulative session usage:
+
+```json
+{
+  "type": "session.idled",
+  "context": {"turn_id": "turn_abc"},
+  "data": {
+    "turn_id": "turn_abc",
+    "iterations": 2,
+    "usage": {
+      "input_tokens": 500,
+      "output_tokens": 150,
+      "cache_read_tokens": 100
+    }
+  }
+}
+```
+
+### Extended Thinking Events
+
+For models with reasoning capabilities (e.g., Claude with `reasoning_effort`):
+
+#### reason.thinking.started
+
+```json
+{
+  "type": "reason.thinking.started",
+  "context": {"turn_id": "turn_abc"},
+  "data": {
+    "turn_id": "turn_abc",
+    "model": "claude-opus-4-5"
+  }
+}
+```
+
+#### reason.thinking.delta
+
+Streaming chain-of-thought reasoning:
+
+```json
+{
+  "type": "reason.thinking.delta",
+  "context": {"turn_id": "turn_abc"},
+  "data": {
+    "turn_id": "turn_abc",
+    "delta": "Let me analyze this step by step...",
+    "accumulated": "Let me analyze this step by step..."
+  }
+}
+```
+
+#### reason.thinking.completed
+
+```json
+{
+  "type": "reason.thinking.completed",
+  "context": {"turn_id": "turn_abc"},
+  "data": {
+    "turn_id": "turn_abc",
+    "thinking": "Let me analyze this step by step...\n\n1. First consideration...\n2. Second consideration..."
+  }
+}
+```
+
+## Event Filtering
+
+### Positive Filtering (types)
+
+Only receive specific event types:
+
+```bash
+# Only turn lifecycle events
+curl -N "https://app.everruns.com/api/v1/sessions/ses_abc/sse?types=turn.started&types=turn.completed&types=turn.failed" \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+```javascript
+const url = new URL('https://app.everruns.com/api/v1/sessions/ses_abc/sse');
+url.searchParams.append('types', 'turn.started');
+url.searchParams.append('types', 'turn.completed');
+url.searchParams.append('types', 'turn.failed');
+
+const eventSource = new EventSource(url.toString(), {
+  headers: { 'Authorization': 'Bearer YOUR_API_KEY' }
+});
+```
+
+### Negative Filtering (exclude)
+
+Receive all events except specific types:
+
+```bash
+# Everything except streaming deltas
+curl -N "https://app.everruns.com/api/v1/sessions/ses_abc/sse?exclude=output.message.delta&exclude=reason.thinking.delta" \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+### Combined Filtering
+
+`types` narrows first, then `exclude` removes from that set:
+
+```bash
+# Turn events, but not failures
+curl -N "https://app.everruns.com/api/v1/sessions/ses_abc/sse?types=turn.started&types=turn.completed&types=turn.failed&exclude=turn.failed" \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+<Warning>
+Maximum 25 types per parameter. Unknown event types return `400 Bad Request`.
+</Warning>
+
+## Resuming After Disconnection
+
+Use `since_id` to resume from a specific event:
+
+```javascript
+let lastEventId = null;
+
+const connect = () => {
+  const url = new URL('https://app.everruns.com/api/v1/sessions/ses_abc/sse');
+  if (lastEventId) {
+    url.searchParams.set('since_id', lastEventId);
+  }
+
+  const eventSource = new EventSource(url.toString(), {
+    headers: { 'Authorization': 'Bearer YOUR_API_KEY' }
+  });
+
+  eventSource.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    lastEventId = data.id;  // Track last seen event
+    // Process event...
+  };
+
+  eventSource.onerror = () => {
+    eventSource.close();
+    setTimeout(connect, 1000);  // Reconnect with backoff
+  };
+};
+
+connect();
+```
+
+Only events **after** the specified ID are streamed.
+
+## Connection Management
+
+### Connection Lifecycle Events
+
+#### connected
+
+Sent immediately when the stream is established:
+
+```json
+{
+  "status": "connected"
+}
+```
+
+#### disconnecting
+
+Sent before graceful close (connection cycling):
+
+```json
+{
+  "reason": "connection_cycle",
+  "retry_ms": 100
+}
+```
+
+Reconnect with `since_id` to avoid missing events.
+
+### Heartbeats
+
+SSE streams send heartbeat comments every 30 seconds:
+
+```text
+: heartbeat
+
+```
+
+These are **invisible to event parsers** but prevent connection timeouts.
+
+<Warning>
+Set a read timeout of 45 seconds (1.5x heartbeat interval) to detect stale connections. If no data arrives within 45s, reconnect.
+</Warning>
+
+### Connection Cycling
+
+To prevent stale connections through proxies:
+
+- **Realtime streams** (session events): Cycled every 5 minutes ±20% jitter
+- **Monitoring streams** (durable workflows): Cycled every 10 minutes ±20% jitter
+
+Before cycling, the server sends a `disconnecting` event. SDKs handle this transparently.
+
+## Building Responsive UIs
+
+### Real-Time Chat Interface
+
+```javascript
+class ChatUI {
+  constructor(sessionId, apiKey) {
+    this.sessionId = sessionId;
+    this.apiKey = apiKey;
+    this.messageBuffer = '';
+  }
+
+  connect() {
+    const url = `https://app.everruns.com/api/v1/sessions/${this.sessionId}/sse`;
+    this.eventSource = new EventSource(url, {
+      headers: { 'Authorization': `Bearer ${this.apiKey}` }
+    });
+
+    this.eventSource.addEventListener('input.message', (event) => {
+      const data = JSON.parse(event.data);
+      this.showUserMessage(data.data.message);
+    });
+
+    this.eventSource.addEventListener('output.message.started', () => {
+      this.showThinkingIndicator();
+    });
+
+    this.eventSource.addEventListener('output.message.delta', (event) => {
+      const data = JSON.parse(event.data);
+      this.hideThinkingIndicator();
+      this.streamAgentText(data.data.delta);
+    });
+
+    this.eventSource.addEventListener('output.message.completed', (event) => {
+      const data = JSON.parse(event.data);
+      this.finalizeAgentMessage(data.data.message);
+    });
+
+    this.eventSource.addEventListener('tool.started', (event) => {
+      const data = JSON.parse(event.data);
+      this.showToolExecution(data.data.tool_call.name);
+    });
+
+    this.eventSource.addEventListener('turn.completed', () => {
+      this.enableInput();
+    });
+
+    this.eventSource.addEventListener('turn.failed', (event) => {
+      const data = JSON.parse(event.data);
+      this.showError(data.data.error);
+      this.enableInput();
+    });
+  }
+
+  showThinkingIndicator() {
+    // Show animated "..." indicator
+  }
+
+  hideThinkingIndicator() {
+    // Hide indicator
+  }
+
+  streamAgentText(delta) {
+    this.messageBuffer += delta;
+    // Append delta to DOM
+  }
+
+  finalizeAgentMessage(message) {
+    this.messageBuffer = '';
+    // Mark message as complete, add timestamp, etc.
+  }
+
+  showToolExecution(toolName) {
+    // Show "Running: Read File" badge
+  }
+}
+```
+
+### Token Usage Tracking
+
+```javascript
+let totalInputTokens = 0;
+let totalOutputTokens = 0;
+
+eventSource.addEventListener('session.idled', (event) => {
+  const data = JSON.parse(event.data);
+  // Reset to cumulative values from backend
+  totalInputTokens = data.data.usage.input_tokens;
+  totalOutputTokens = data.data.usage.output_tokens;
+  updateUsageDisplay();
+});
+
+eventSource.addEventListener('llm.generation', (event) => {
+  const data = JSON.parse(event.data);
+  // Increment during turn
+  totalInputTokens += data.data.metadata.usage.input_tokens;
+  totalOutputTokens += data.data.metadata.usage.output_tokens;
+  updateUsageDisplay();
+});
+```
+
+This provides real-time feedback during long turns while staying accurate.
+
+## Polling Alternative
+
+For environments that don't support SSE, poll the events endpoint:
+
+```python
+import time
+
+last_event_id = None
+while True:
+    params = {}
+    if last_event_id:
+        params['since_id'] = last_event_id
+    
+    response = client.events.list(session_id, **params)
+    
+    for event in response.data:
+        print(f"{event.type}: {event.data}")
+        last_event_id = event.id
+        
+        if event.type == "turn.completed":
+            break
+    
+    time.sleep(0.5)  # Poll every 500ms
+```
+
+<Warning>
+Polling is less efficient than SSE. Use SSE when possible for better performance and lower latency.
+</Warning>
+
+## Common Pitfalls
+
+<Warning>
+**Buffering Deltas**: Always use `output.message.completed` for the final text. Relying solely on accumulated deltas can miss the last chunk if the connection drops.
+</Warning>
+
+<Warning>
+**Event Ordering**: Events are delivered in order within a session, but processing must be idempotent. Network issues may cause duplicate delivery.
+</Warning>
+
+<Warning>
+**Connection Limits**: Browsers limit concurrent SSE connections per domain (typically 6). Reuse connections or use HTTP/2.
+</Warning>
+
+<Warning>
+**Authentication**: EventSource doesn't support custom headers in all browsers. Use URL parameters for the API key or use a proxy that adds headers.
+</Warning>
+
+<Warning>
+**Stale Connections**: Always implement a read timeout (45s recommended). If no data arrives, close and reconnect with `since_id`.
+</Warning>
+
+## Next Steps
+
+- [View all event types](/api-reference/events)
+- [Learn about turn execution](/concepts/turn-based-execution)
+- [Implement client-side tools](/guides/client-side-tools)
+- [Monitor with OpenTelemetry](/concepts/observability)

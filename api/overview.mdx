@@ -1,0 +1,152 @@
+---
+title: API Overview
+description: Introduction to the Everruns REST API
+---
+
+The Everruns API is a RESTful HTTP API that provides programmatic access to all platform functionality including agents, sessions, messages, and more.
+
+## Base URL
+
+All API endpoints are prefixed with `/v1/`:
+
+```
+https://your-domain.com/v1/
+```
+
+For example, to list agents:
+
+```
+GET https://your-domain.com/v1/agents
+```
+
+<Note>
+The `/health` endpoint is an exception and does not include the `/v1/` prefix.
+</Note>
+
+## Versioning
+
+The API uses URL-based versioning with the `/v1/` prefix. This ensures backward compatibility as the API evolves.
+
+## RESTful Conventions
+
+The API follows standard REST conventions:
+
+- **GET** - Retrieve resources
+- **POST** - Create new resources
+- **PUT** - Replace or upsert resources
+- **PATCH** - Partially update resources
+- **DELETE** - Delete or archive resources
+
+## Response Format
+
+All endpoints return JSON responses. Server-Sent Events (SSE) are used for real-time event streaming with `text/event-stream` content type.
+
+### Success Responses
+
+Single resource:
+```json
+{
+  "id": "agent_01234567-...",
+  "name": "Research Assistant",
+  "status": "active"
+}
+```
+
+List of resources (non-paginated):
+```json
+{
+  "data": [...],
+  "total": 42
+}
+```
+
+Paginated lists:
+```json
+{
+  "data": [...],
+  "total": 150,
+  "offset": 0,
+  "limit": 20
+}
+```
+
+## Pagination
+
+Endpoints that return lists support pagination via query parameters:
+
+| Parameter | Type | Default | Max | Description |
+|-----------|------|---------|-----|-------------|
+| `offset` | integer | 0 | - | Number of items to skip |
+| `limit` | integer | 20 | 100 | Maximum items to return |
+
+### Example
+
+```bash
+# First page (default)
+GET /v1/sessions
+
+# Second page
+GET /v1/sessions?offset=20&limit=20
+
+# Custom page size
+GET /v1/sessions?limit=10
+```
+
+### Paginated Response Format
+
+```json
+{
+  "data": [...],
+  "total": 150,
+  "offset": 0,
+  "limit": 20
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `data` | array | Items for the current page |
+| `total` | integer | Total count across all pages |
+| `offset` | integer | Current offset (echoed from request) |
+| `limit` | integer | Current limit (echoed from request) |
+
+<Note>
+Currently, only the `GET /v1/sessions` endpoint supports pagination. Other list endpoints return all items.
+</Note>
+
+## OpenAPI Specification
+
+The complete API specification is available in OpenAPI format:
+
+```
+GET /api-doc/openapi.json
+```
+
+The OpenAPI spec is generated from Rust code using `utoipa` derive macros, ensuring it stays in sync with the implementation.
+
+### Generating the Spec
+
+You can generate the spec without running the full server:
+
+```bash
+# Generate spec to stdout
+cargo run --bin export-openapi
+
+# Or use the convenience script
+./scripts/export-openapi.sh
+```
+
+This is useful for:
+- CI/CD pipelines
+- Documentation builds
+- Static spec export for external tools
+
+## Rate Limiting
+
+API rate limits depend on your deployment configuration. Check with your administrator for specific limits.
+
+## Next Steps
+
+- Learn about [Authentication](/api/authentication)
+- Understand [Error Handling](/api/errors)
+- Explore specific endpoints in the API Reference

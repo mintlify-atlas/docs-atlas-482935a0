@@ -1,0 +1,266 @@
+---
+title: LLM Providers
+description: Configure OpenAI, Anthropic, and Gemini language model providers
+---
+
+Everruns supports multiple LLM providers through a unified abstraction layer. Configure providers to access different models and capabilities.
+
+## Supported Providers
+
+### OpenAI
+
+OpenAI provider supports two API protocols:
+
+- **OpenAI (Responses API)** - Uses the Open Responses API protocol (https://www.openresponses.org/). Recommended for new projects.
+- **OpenAI Completions** - Uses the Chat Completions API (`/v1/chat/completions`). For backward compatibility.
+
+Both protocols support:
+- GPT-4o, GPT-4o-mini models
+- O-series reasoning models (o1, o1-mini, o1-pro, o3-mini)
+- Vision capabilities (image inputs)
+- Function/tool calling
+- Extended thinking/reasoning
+
+### Anthropic
+
+Anthropic provider supports:
+- Claude Sonnet 4, Claude Opus 4 (latest)
+- Claude 3.5 Sonnet, Claude 3.5 Haiku
+- Claude 3 Opus, Claude 3 Sonnet, Claude 3 Haiku
+- Vision capabilities
+- Tool calling
+- Extended thinking (interleaved thinking with tools)
+
+### Google Gemini
+
+Gemini provider supports:
+- Gemini Pro models
+- Vision and multimodal capabilities
+- Tool calling
+
+## Adding a Provider
+
+<Steps>
+  <Step title="Create provider">
+    Navigate to **Settings > LLM Providers** and click **Add Provider**.
+
+    Select the provider type and enter:
+    - **Name** - Display name for the provider
+    - **API Key** - Your API key from the provider
+    - **Base URL** (optional) - Custom endpoint URL for OpenAI-compatible APIs
+
+    ```bash
+    # Example: Create OpenAI provider via API
+    curl -X POST https://api.everruns.com/v1/llm-providers \
+      -H "Authorization: Bearer YOUR_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "name": "My OpenAI",
+        "provider_type": "openai",
+        "api_key": "sk-..."
+      }'
+    ```
+  </Step>
+
+  <Step title="Sync models">
+    After creating a provider, sync available models from the provider's API:
+
+    ```bash
+    curl -X POST https://api.everruns.com/v1/llm-providers/{provider_id}/sync-models \
+      -H "Authorization: Bearer YOUR_TOKEN"
+    ```
+
+    This discovers available models and adds them to your organization.
+
+    **Background sync**: Model discovery runs automatically every 24 hours for all active providers.
+  </Step>
+
+  <Step title="Set default model">
+    Mark one model as the default for new agents:
+
+    ```bash
+    curl -X PATCH https://api.everruns.com/v1/llm-models/{model_id} \
+      -H "Authorization: Bearer YOUR_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d '{"is_default": true}'
+    ```
+  </Step>
+</Steps>
+
+## Configuration Options
+
+<Tabs>
+  <Tab title="OpenAI">
+    ```json
+    {
+      "name": "OpenAI Production",
+      "provider_type": "openai",
+      "api_key": "sk-...",
+      "base_url": null
+    }
+    ```
+
+    **Custom endpoints**: Set `base_url` to use OpenAI-compatible APIs:
+    ```json
+    {
+      "base_url": "https://api.openai.azure.com/v1"
+    }
+    ```
+
+    **Environment variable fallback**: If no API key is set in the database, Everruns falls back to `DEFAULT_OPENAI_API_KEY` environment variable.
+  </Tab>
+
+  <Tab title="Anthropic">
+    ```json
+    {
+      "name": "Anthropic",
+      "provider_type": "anthropic",
+      "api_key": "sk-ant-..."
+    }
+    ```
+
+    **Environment variable fallback**: `DEFAULT_ANTHROPIC_API_KEY`
+
+    **Extended thinking**: Anthropic supports extended thinking with the `anthropic-beta: interleaved-thinking-2025-05-14` header when tools are present.
+  </Tab>
+
+  <Tab title="Gemini">
+    ```json
+    {
+      "name": "Google Gemini",
+      "provider_type": "gemini",
+      "api_key": "AIza..."
+    }
+    ```
+
+    **Environment variable fallback**: `DEFAULT_GEMINI_API_KEY`
+  </Tab>
+</Tabs>
+
+## Model Synchronization
+
+### Manual Sync
+
+Trigger model discovery via API:
+
+```bash
+POST /v1/llm-providers/{provider_id}/sync-models
+```
+
+Response:
+```json
+{
+  "status": "success",
+  "created": 5,
+  "updated": 10,
+  "stale": 2
+}
+```
+
+- **created**: New models discovered and added
+- **updated**: Existing models updated (metadata refreshed)
+- **stale**: Models no longer returned by the provider API
+
+### Background Sync
+
+Automatic model discovery runs every 24 hours for all active providers. Discovered models are:
+- Created with `source: "discovered"`
+- Updated with latest metadata on each sync
+- Marked as stale if not seen in recent sync
+
+**Stale detection**: A discovered model is considered stale if `last_seen_at < provider.last_synced_at`.
+
+### Model Sources
+
+Models can be added via:
+- **Manual** - User-created via API or UI
+- **Discovered** - Automatically synced from provider API
+- **Predefined** - Seeded during system initialization
+
+## Environment Variables
+
+For development convenience, Everruns supports API key fallbacks:
+
+```bash
+# OpenAI
+DEFAULT_OPENAI_API_KEY=sk-...
+
+# Anthropic
+DEFAULT_ANTHROPIC_API_KEY=sk-ant-...
+
+# Gemini
+DEFAULT_GEMINI_API_KEY=AIza...
+```
+
+These are used when:
+1. A provider exists but has no API key configured
+2. Model sync needs to authenticate
+
+<Note>
+  Environment variable fallbacks are for **development only**. In production, always configure API keys via the UI or API.
+</Note>
+
+## API Key Security
+
+API keys are protected with envelope encryption:
+
+1. **Encryption at rest** - AES-256-GCM encryption before storage
+2. **Never exposed** - API responses show `api_key_set: true` but never return the key
+3. **Decryption on-demand** - Keys are decrypted only during LLM calls
+4. **Memory lifetime** - Decrypted keys exist in worker memory only during the API call
+
+See [Encryption](/security/encryption) for details.
+
+## Provider Status
+
+Providers can be:
+- **Active** - Available for model selection
+- **Disabled** - Hidden from model selection, existing sessions unaffected
+
+Disable a provider:
+```bash
+curl -X PATCH https://api.everruns.com/v1/llm-providers/{provider_id} \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"status": "disabled"}'
+```
+
+## Custom Base URLs
+
+Use custom endpoints for:
+- Azure OpenAI
+- Self-hosted OpenAI-compatible APIs
+- Proxy services
+
+```json
+{
+  "provider_type": "openai",
+  "base_url": "https://your-custom-endpoint.com/v1"
+}
+```
+
+<Warning>
+  Providers with custom base URLs **do not support** automatic model discovery. You must manually create models.
+</Warning>
+
+## Rate Limiting
+
+Everruns automatically retries transient errors with exponential backoff:
+
+- **Max retries**: 2
+- **Initial backoff**: 1 second
+- **Max backoff**: 60 seconds
+- **Jitter**: ±25%
+
+Retryable status codes:
+- `408` - Request Timeout
+- `429` - Rate Limited
+- `5xx` - Server Errors
+
+The system parses `retry-after` headers from providers to respect rate limits.
+
+## Next Steps
+
+- [Configure models](/integrations/models) - Manage available models
+- [Create agents](/guides/agents) - Build agents with configured models
+- [Security](/security/encryption) - Learn about API key encryption

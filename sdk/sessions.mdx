@@ -1,0 +1,340 @@
+---
+title: "Sessions"
+description: "Manage conversation sessions via the SDK"
+---
+
+## Overview
+
+Sessions are conversations with agents. Each session maintains its own context, message history, and optional filesystem.
+
+## Create a session
+
+Start a new conversation with an agent:
+
+```typescript
+const session = await client.sessions.create({
+  agent_id: 'agent_01234567-...',
+  title: 'Project Planning',
+  tags: ['planning', 'q1-2026'],
+});
+
+console.log('Session ID:', session.id);
+console.log('Agent:', session.agent_id);
+console.log('Status:', session.status);
+```
+
+### Session properties
+
+| Property | Type | Required | Description |
+|----------|------|----------|-------------|
+| `agent_id` | string | Yes | Agent to use in this session |
+| `title` | string | No | Session display name |
+| `tags` | string[] | No | Tags for organization |
+| `model_id` | string | No | Override the agent's default model |
+| `capabilities` | array | No | Additional session-level capabilities |
+
+### Session-level capabilities
+
+Extend an agent's capabilities for a specific session:
+
+```typescript
+const session = await client.sessions.create({
+  agent_id: 'agent_01234567-...',
+  title: 'Research with Web Access',
+  // Add web_fetch capability just for this session
+  capabilities: [
+    { ref: 'web_fetch', config: { timeout_ms: 30000 } }
+  ],
+});
+```
+
+<Note>
+Session capabilities are **additive** to the agent's capabilities. They don't replace the agent's configuration.
+</Note>
+
+## List sessions
+
+Retrieve all sessions in your organization:
+
+```typescript
+const response = await client.sessions.list();
+
+console.log(`Found ${response.total} sessions`);
+response.data.forEach(session => {
+  console.log(`- ${session.title} (${session.id})`);
+});
+```
+
+### Filter by agent
+
+Get all sessions for a specific agent:
+
+```typescript
+const response = await client.sessions.list({
+  agent_id: 'agent_01234567-...',
+});
+
+console.log(`Agent has ${response.total} sessions`);
+```
+
+### Pagination
+
+Handle large result sets with pagination:
+
+```typescript
+// Get first page
+let response = await client.sessions.list({
+  limit: 20,
+  offset: 0,
+});
+
+console.log(`Showing ${response.data.length} of ${response.total} sessions`);
+
+// Get next page
+response = await client.sessions.list({
+  limit: 20,
+  offset: 20,
+});
+```
+
+## Get session details
+
+Fetch a specific session:
+
+```typescript
+const session = await client.sessions.get('session_01234567-...');
+
+console.log('Session:', session.title);
+console.log('Agent:', session.agent_id);
+console.log('Status:', session.status);
+console.log('Created:', session.created_at);
+```
+
+## Update a session
+
+Modify session metadata:
+
+```typescript
+const updated = await client.sessions.update('session_01234567-...', {
+  title: 'Updated Project Planning',
+  tags: ['planning', 'q1-2026', 'high-priority'],
+});
+
+console.log('Session updated:', updated.id);
+```
+
+## Get or create chat session
+
+Access your personal chat session (creates if doesn't exist):
+
+```typescript
+const chatSession = await client.sessions.getOrCreateChat();
+
+console.log('Chat session:', chatSession.id);
+```
+
+<Tip>
+The chat session is a singleton per user, perfect for general-purpose interactions.
+</Tip>
+
+## Cancel active turn
+
+Stop the agent's current work:
+
+```typescript
+try {
+  await client.sessions.cancelTurn('session_01234567-...');
+  console.log('Turn cancelled');
+} catch (error) {
+  if (error.status === 400) {
+    console.log('Session is not active');
+  }
+}
+```
+
+### Cancellation flow
+
+When you cancel a turn:
+
+1. `turn.cancelled` event is emitted immediately
+2. User message "User requested to cancel the work." is added
+3. Agent stops processing and emits completion message
+4. Session returns to idle state
+
+```typescript
+// Listen for cancellation events
+for await (const event of client.sessions.streamEvents(session.id)) {
+  if (event.type === 'turn.cancelled') {
+    console.log('Turn was cancelled');
+  }
+  
+  if (event.type === 'output.message.completed') {
+    console.log('Cancellation confirmed');
+    break;
+  }
+}
+```
+
+## Delete a session
+
+Permanently delete a session and all its data:
+
+```typescript
+await client.sessions.delete('session_01234567-...');
+
+console.log('Session deleted');
+```
+
+<Warning>
+Deleting a session removes all messages, events, and filesystem data. This action cannot be undone.
+</Warning>
+
+## Session filesystem
+
+Each session has its own virtual filesystem. See [API Reference](/api-reference/introduction) for filesystem operations.
+
+### Read file
+
+```typescript
+const content = await client.sessions.fs.read('session_01234567-...', 'notes.txt');
+console.log(content);
+```
+
+### Write file
+
+```typescript
+await client.sessions.fs.write('session_01234567-...', 'notes.txt', {
+  content: 'Meeting notes from today',
+});
+```
+
+### List directory
+
+```typescript
+const files = await client.sessions.fs.list('session_01234567-...', '/');
+
+files.forEach(file => {
+  console.log(`${file.type}: ${file.path}`);
+});
+```
+
+## Usage tracking
+
+Monitor token usage for a session:
+
+```typescript
+const session = await client.sessions.get('session_01234567-...');
+
+console.log('Token usage:');
+console.log('  Input tokens:', session.usage?.input_tokens || 0);
+console.log('  Output tokens:', session.usage?.output_tokens || 0);
+console.log('  Total:', (session.usage?.input_tokens || 0) + (session.usage?.output_tokens || 0));
+```
+
+### Real-time usage tracking
+
+Track usage as the session progresses:
+
+```typescript
+let totalInputTokens = 0;
+let totalOutputTokens = 0;
+
+for await (const event of client.sessions.streamEvents(session.id)) {
+  // Track LLM generations
+  if (event.type === 'llm.generation' && event.data.metadata.usage) {
+    totalInputTokens += event.data.metadata.usage.input_tokens;
+    totalOutputTokens += event.data.metadata.usage.output_tokens;
+    console.log(`Tokens used: ${totalInputTokens} in, ${totalOutputTokens} out`);
+  }
+  
+  // Get final cumulative usage
+  if (event.type === 'session.idled' && event.data.usage) {
+    console.log('Final usage:', event.data.usage);
+    break;
+  }
+}
+```
+
+## Error handling
+
+Handle common session errors:
+
+```typescript
+try {
+  const session = await client.sessions.create({
+    agent_id: 'agent_01234567-...',
+  });
+} catch (error) {
+  if (error instanceof EverrunsError) {
+    switch (error.status) {
+      case 400:
+        console.error('Invalid session configuration:', error.message);
+        break;
+      case 404:
+        console.error('Agent not found');
+        break;
+      default:
+        console.error('API error:', error.message);
+    }
+  }
+}
+```
+
+## Best practices
+
+### Use descriptive titles
+
+```typescript
+// Good
+const session = await client.sessions.create({
+  agent_id: agent.id,
+  title: 'Q1 2026 Budget Review - Marketing',
+  tags: ['finance', 'q1-2026', 'marketing'],
+});
+
+// Avoid generic titles
+const genericSession = await client.sessions.create({
+  agent_id: agent.id,
+  title: 'Session 1', // Not descriptive
+});
+```
+
+### Organize with tags
+
+```typescript
+const session = await client.sessions.create({
+  agent_id: agent.id,
+  title: 'Customer Support - Ticket #1234',
+  tags: ['support', 'customer:acme-corp', 'priority:high'],
+});
+```
+
+### Clean up old sessions
+
+```typescript
+// Delete sessions older than 30 days
+const sessions = await client.sessions.list();
+const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+
+for (const session of sessions.data) {
+  const createdAt = new Date(session.created_at).getTime();
+  if (createdAt < thirtyDaysAgo) {
+    await client.sessions.delete(session.id);
+    console.log(`Deleted old session: ${session.title}`);
+  }
+}
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+
+<Card title="Messages" icon="message" href="/sdk/messages">
+  Send messages in your sessions
+</Card>
+
+<Card title="Event Streaming" icon="stream" href="/sdk/streaming">
+  Listen to real-time session events
+</Card>
+
+</CardGroup>

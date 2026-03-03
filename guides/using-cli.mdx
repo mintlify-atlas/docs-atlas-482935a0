@@ -1,0 +1,672 @@
+---
+title: Using the CLI
+description: Complete guide to the Everruns command-line interface
+---
+
+The Everruns CLI provides a fast way to manage agents, sessions, and conversations from your terminal. This guide covers installation, configuration, and all available commands.
+
+## Goal
+
+By the end of this guide, you'll be able to:
+- Install and configure the CLI
+- Create and manage agents from the command line
+- Start interactive chat sessions
+- Use different output formats for scripting
+- Automate workflows with the CLI
+
+## Installation
+
+### From Crates.io (Rust)
+
+```bash
+cargo install everruns-cli
+```
+
+### From Source
+
+```bash
+git clone https://github.com/everruns/everruns.git
+cd everruns
+cargo build --release -p everruns-cli
+sudo mv target/release/everruns /usr/local/bin/
+```
+
+### Verify Installation
+
+```bash
+everruns --version
+```
+
+## Configuration
+
+### API Key Setup
+
+The CLI requires an API key for authentication:
+
+```bash
+# Set environment variable
+export EVERRUNS_API_KEY="your-api-key-here"
+
+# Or use the --api-key flag
+everruns --api-key "your-api-key-here" agents list
+```
+
+### API URL (Optional)
+
+For self-hosted instances or development:
+
+```bash
+# Set environment variable
+export EVERRUNS_API_URL="https://your-instance.com/api"
+
+# Or use the --api-url flag
+everruns --api-url "http://localhost:9000" agents list
+```
+
+Default: `https://app.everruns.com/api`
+
+### Shell Configuration
+
+Add to your `~/.bashrc` or `~/.zshrc`:
+
+```bash
+# Everruns CLI
+export EVERRUNS_API_KEY="your-api-key-here"
+export EVERRUNS_API_URL="https://app.everruns.com/api"  # Optional
+```
+
+## Global Options
+
+Available for all commands:
+
+| Flag | Short | Description | Default |
+|------|-------|-------------|----------|
+| `--output` | `-o` | Output format: `text`, `json`, `yaml` | `text` |
+| `--quiet` | `-q` | Suppress non-essential output | `false` |
+| `--api-key` | | API key (overrides env var) | `$EVERRUNS_API_KEY` |
+| `--api-url` | | API base URL (overrides env var) | `$EVERRUNS_API_URL` |
+
+## Agent Commands
+
+### Create Agent
+
+<CodeGroup>
+
+```bash Inline Arguments
+everruns agents create \
+  --name "Customer Support Agent" \
+  --system-prompt "You are a helpful customer support agent. Be concise and friendly." \
+  --description "Handles customer inquiries" \
+  --tag support \
+  --tag customer-facing
+```
+
+```bash From File
+everruns agents create --file agent.md
+```
+
+```bash JSON Output
+everruns agents create \
+  --name "Support Agent" \
+  --system-prompt "You help customers." \
+  --output json
+```
+
+</CodeGroup>
+
+**Options:**
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `--file` | No | Path to YAML/JSON/Markdown file |
+| `--name` | Yes* | Agent name |
+| `--system-prompt` | Yes* | System prompt |
+| `--description` | No | Agent description |
+| `--model` | No | Default model ID |
+| `--tag` | No | Tag (repeatable) |
+
+*Required if `--file` not provided
+
+**Example Output (text):**
+
+```
+Created agent: agt_01933b5a00007000800000000001
+Name: Customer Support Agent
+```
+
+**Example Output (json):**
+
+```json
+{
+  "id": "agt_01933b5a00007000800000000001",
+  "name": "Customer Support Agent",
+  "system_prompt": "You are a helpful customer support agent...",
+  "description": "Handles customer inquiries",
+  "tags": ["support", "customer-facing"],
+  "capabilities": [],
+  "status": "active",
+  "created_at": "2024-01-15T10:30:00Z",
+  "updated_at": "2024-01-15T10:30:00Z"
+}
+```
+
+### List Agents
+
+```bash
+everruns agents list
+```
+
+**Example Output:**
+
+```
+ID                                   NAME                  STATUS
+agt_01933b5a00007000800000000001     Support Agent         active
+agt_01933b5a00007000800000000002     Research Assistant    active
+agt_01933b5a00007000800000000003     Code Reviewer         active
+```
+
+### Get Agent
+
+```bash
+everruns agents get agt_01933b5a00007000800000000001
+```
+
+**Example Output:**
+
+```
+ID:          agt_01933b5a00007000800000000001
+Name:        Support Agent
+Status:      active
+Description: Handles customer inquiries
+Tags:        support, customer-facing
+Created:     2024-01-15T10:30:00Z
+```
+
+### Delete Agent
+
+```bash
+everruns agents delete agt_01933b5a00007000800000000001
+```
+
+Archives the agent (soft delete).
+
+## Session Commands
+
+### Create Session
+
+```bash
+everruns sessions create \
+  --harness harness_01933b5a \
+  --agent agt_01933b5a \
+  --title "Customer Support - Ticket #1234"
+```
+
+**Options:**
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `--harness` | Yes | Harness ID |
+| `--agent` | No | Agent ID |
+| `--title` | No | Session title |
+| `--model` | No | Model ID override |
+
+**Example Output:**
+
+```
+Created session: ses_01933b5a00007000800000000002
+Agent:  agt_01933b5a00007000800000000001
+Status: idle
+```
+
+### List Sessions
+
+```bash
+everruns sessions list
+```
+
+**Example Output:**
+
+```
+ID                                   TITLE                 STATUS     CREATED
+ses_01933b5a00007000800000000002     Support - Ticket #1   idle       2024-01-15T10:30:00Z
+ses_01933b5a00007000800000000003     Research Task         active     2024-01-15T09:15:00Z
+```
+
+### Get Session
+
+```bash
+everruns sessions get ses_01933b5a00007000800000000002
+```
+
+## Chat Command
+
+Send a message and stream the response:
+
+```bash
+everruns chat --session ses_01933b5a "What is the status of order #1234?"
+```
+
+**Options:**
+
+| Flag | Required | Description | Default |
+|------|----------|-------------|----------|
+| `--session` | Yes | Session ID | |
+| `--timeout` | No | Max wait time (seconds) | 300 |
+| `--no-stream` | No | Send message and exit immediately | `false` |
+
+**Example Output:**
+
+```
+You: What is the status of order #1234?
+
+Agent: I'll look up that order for you. Order #1234 is currently in transit and scheduled for delivery on January 18th. The tracking number is TRACK-5678.
+```
+
+### No-Stream Mode
+
+Send a message without waiting for a response:
+
+```bash
+everruns chat --session ses_01933b5a --no-stream "Background task: analyze logs"
+```
+
+Useful for triggering long-running agent tasks from scripts.
+
+## Capabilities Command
+
+List available capabilities:
+
+```bash
+everruns capabilities
+```
+
+**Options:**
+
+| Flag | Description | Default |
+|------|-------------|----------|
+| `--status` | Filter by status: `available`, `coming_soon`, `all` | `available` |
+
+**Example Output:**
+
+```
+ID                   NAME                STATUS       CATEGORY
+current_time         Current Time        available    Utilities
+web_fetch            Web Fetch           available    Web
+session_file_system  File System         available    Storage
+stateless_todo_list  Todo List           available    Productivity
+```
+
+## Output Formats
+
+### Text (Default)
+
+Human-readable tables and formatted output:
+
+```bash
+everruns agents list
+```
+
+### JSON
+
+Machine-readable JSON for scripting:
+
+```bash
+everruns agents list --output json
+```
+
+```json
+{
+  "data": [
+    {
+      "id": "agt_01933b5a",
+      "name": "Support Agent",
+      "status": "active",
+      ...
+    }
+  ]
+}
+```
+
+### YAML
+
+Human-readable structured format:
+
+```bash
+everruns agents list --output yaml
+```
+
+```yaml
+data:
+  - id: agt_01933b5a
+    name: Support Agent
+    status: active
+```
+
+## Scripting with the CLI
+
+### Create Agent and Session
+
+```bash
+#!/bin/bash
+set -euo pipefail
+
+# Create agent
+AGENT_ID=$(everruns agents create \
+  --name "Analysis Agent" \
+  --system-prompt "You analyze data." \
+  --quiet)
+
+echo "Created agent: $AGENT_ID"
+
+# Create session
+SESSION_ID=$(everruns sessions create \
+  --harness harness_base \
+  --agent "$AGENT_ID" \
+  --title "Data Analysis" \
+  --quiet)
+
+echo "Created session: $SESSION_ID"
+
+# Send message
+everruns chat --session "$SESSION_ID" "Analyze the sales trends"
+```
+
+### Batch Agent Creation
+
+```bash
+#!/bin/bash
+
+# Create agents from files
+for file in agents/*.md; do
+  echo "Creating agent from $file..."
+  everruns agents create --file "$file" --quiet
+done
+```
+
+### JSON Processing with jq
+
+```bash
+# Get all agent IDs
+everruns agents list --output json | jq -r '.data[].id'
+
+# Filter agents by tag
+everruns agents list --output json | \
+  jq -r '.data[] | select(.tags | contains(["support"])) | .id'
+
+# Count active sessions
+everruns sessions list --output json | \
+  jq -r '.data | map(select(.status == "active")) | length'
+```
+
+### Automated Workflows
+
+```bash
+#!/bin/bash
+# Daily report generation
+
+SESSION_ID="ses_daily_report"
+
+# Trigger report generation
+everruns chat --session "$SESSION_ID" --no-stream \
+  "Generate the daily sales report for $(date -I)"
+
+# Poll for completion (separate process)
+while true; do
+  STATUS=$(everruns sessions get "$SESSION_ID" --output json | jq -r '.status')
+  if [ "$STATUS" = "idle" ]; then
+    echo "Report generation complete"
+    break
+  fi
+  sleep 5
+done
+```
+
+## File-Based Agent Definitions
+
+### Markdown Format
+
+The recommended format for agent definitions:
+
+```markdown research-agent.md
+---
+name: "Research Agent"
+description: "Conducts technical research"
+tags:
+  - research
+  - analysis
+capabilities:
+  - web_fetch
+  - session_file_system
+default_model_id: "mod_gpt4o"
+---
+You are an expert research analyst. Your role is to:
+
+1. Break down research topics into specific questions
+2. Gather information from authoritative sources
+3. Synthesize findings into clear reports
+
+## Quality Standards
+
+- Always cite sources
+- Distinguish facts from opinions
+- Note limitations in available information
+```
+
+Create the agent:
+
+```bash
+everruns agents create --file research-agent.md
+```
+
+### YAML Format
+
+```yaml agent.yaml
+name: "Code Reviewer"
+description: "Reviews code for best practices"
+system_prompt: |
+  You are an expert code reviewer. Focus on:
+  - Security vulnerabilities
+  - Performance issues
+  - Maintainability
+  - Best practices
+tags:
+  - code-review
+  - development
+capabilities:
+  - session_file_system
+default_model_id: "mod_claude_opus"
+```
+
+### JSON Format
+
+```json agent.json
+{
+  "name": "Data Analyst",
+  "description": "Analyzes datasets and generates insights",
+  "system_prompt": "You analyze data and provide insights.",
+  "tags": ["analytics", "data"],
+  "capabilities": ["session_file_system"],
+  "default_model_id": "mod_gpt4o"
+}
+```
+
+## Quiet Mode
+
+Suppress non-essential output for scripting:
+
+```bash
+# Only output the agent ID
+AGENT_ID=$(everruns agents create \
+  --name "Agent" \
+  --system-prompt "You help." \
+  --quiet)
+
+echo "$AGENT_ID"  # agt_01933b5a00007000800000000001
+```
+
+Without `--quiet`:
+
+```bash
+everruns agents create --name "Agent" --system-prompt "You help."
+# Output:
+# Created agent: agt_01933b5a00007000800000000001
+# Name: Agent
+```
+
+With `--quiet`:
+
+```bash
+everruns agents create --name "Agent" --system-prompt "You help." --quiet
+# Output:
+# agt_01933b5a00007000800000000001
+```
+
+## Common Workflows
+
+### Interactive Research Session
+
+```bash
+# 1. Create research agent
+AGENT_ID=$(everruns agents create --file research-agent.md --quiet)
+
+# 2. Create session
+SESSION_ID=$(everruns sessions create \
+  --harness harness_base \
+  --agent "$AGENT_ID" \
+  --title "AI Research" \
+  --quiet)
+
+# 3. Interactive chat
+everruns chat --session "$SESSION_ID" "Research the latest advances in transformer models"
+
+# 4. Follow-up
+everruns chat --session "$SESSION_ID" "Summarize the key findings"
+```
+
+### Automated Code Review
+
+```bash
+#!/bin/bash
+# Automated PR review
+
+PR_NUMBER="$1"
+SESSION_ID="ses_code_review"
+
+# Upload PR diff to session filesystem
+curl -X POST "https://app.everruns.com/api/v1/sessions/$SESSION_ID/fs/pr-$PR_NUMBER.diff" \
+  -H "Authorization: Bearer $EVERRUNS_API_KEY" \
+  --data-binary @diff.txt
+
+# Request review
+everruns chat --session "$SESSION_ID" --no-stream \
+  "Review the code in pr-$PR_NUMBER.diff and create a review report in review-$PR_NUMBER.md"
+
+# Wait for completion and download report
+# (implementation left as exercise)
+```
+
+### Batch Processing
+
+```bash
+#!/bin/bash
+# Process multiple files
+
+SESSION_ID=$(everruns sessions create \
+  --harness harness_base \
+  --agent agt_analyst \
+  --quiet)
+
+for file in data/*.csv; do
+  echo "Processing $file..."
+  
+  # Upload file
+  filename=$(basename "$file")
+  curl -X POST "https://app.everruns.com/api/v1/sessions/$SESSION_ID/fs/$filename" \
+    -H "Authorization: Bearer $EVERRUNS_API_KEY" \
+    --data-binary @"$file"
+  
+  # Trigger analysis
+  everruns chat --session "$SESSION_ID" --no-stream \
+    "Analyze $filename and save the report as report-$filename.md"
+done
+```
+
+## Troubleshooting
+
+### Authentication Errors
+
+```
+ERROR: EVERRUNS_API_KEY environment variable not set
+```
+
+**Solution:**
+
+```bash
+export EVERRUNS_API_KEY="your-api-key-here"
+```
+
+Or use `--api-key` flag.
+
+### Connection Errors
+
+```
+Failed to create agent: Network error
+```
+
+**Solution:**
+
+Check API URL:
+
+```bash
+everruns --api-url "http://localhost:9000" agents list
+```
+
+### Command Not Found
+
+```
+bash: everruns: command not found
+```
+
+**Solution:**
+
+Ensure the binary is in your `$PATH`:
+
+```bash
+# Check installation
+which everruns
+
+# Add to PATH if needed
+export PATH="$HOME/.cargo/bin:$PATH"
+```
+
+## Common Pitfalls
+
+<Warning>
+**Quiet Mode with Errors**: The `--quiet` flag only suppresses success output. Errors are always printed to stderr.
+</Warning>
+
+<Warning>
+**File Paths**: The `--file` flag expects absolute or relative paths. Shell expansion works:
+```bash
+everruns agents create --file ~/agents/support.md
+everruns agents create --file ./agents/*.md  # Error: expects one file
+```
+</Warning>
+
+<Warning>
+**JSON Parsing**: When using `--output json`, wrap the entire output in your JSON parser. Some commands print additional context to stderr.
+</Warning>
+
+<Warning>
+**Chat Timeout**: The default chat timeout is 300 seconds (5 minutes). For long-running tasks, use `--no-stream` or increase `--timeout`:
+```bash
+everruns chat --session ses_abc --timeout 600 "Complex analysis"
+```
+</Warning>
+
+## Next Steps
+
+- [Explore agent examples](https://github.com/everruns/everruns/tree/main/examples/agents)
+- [Learn about capabilities](/guides/adding-capabilities)
+- [Use the REST API](/api-reference/agents)
+- [Use the Python SDK](https://github.com/everruns/everruns-python)

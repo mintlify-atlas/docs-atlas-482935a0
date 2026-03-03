@@ -1,0 +1,566 @@
+---
+title: "Streaming"
+description: "Stream real-time events via the SDK"
+---
+
+## Overview
+
+Everruns uses Server-Sent Events (SSE) to stream real-time updates about session execution. The SDK provides async iterators for idiomatic event handling.
+
+## Basic streaming
+
+Stream all events from a session:
+
+```typescript
+for await (const event of client.sessions.streamEvents('session_01234567-...')) {
+  console.log('Event:', event.type);
+  console.log('Data:', event.data);
+}
+```
+
+## Event types
+
+### Input events
+
+User messages submitted to the session:
+
+```typescript
+for await (const event of client.sessions.streamEvents(sessionId)) {
+  if (event.type === 'input.message') {
+    console.log('User message:', event.data.message.content[0]?.text);
+  }
+}
+```
+
+### Output events
+
+Agent responses with streaming support:
+
+```typescript
+for await (const event of client.sessions.streamEvents(sessionId)) {
+  switch (event.type) {
+    case 'output.message.started':
+      console.log('Agent is thinking...');
+      break;
+    
+    case 'output.message.delta':
+      // Stream text as it arrives
+      process.stdout.write(event.data.delta);
+      break;
+    
+    case 'output.message.completed':
+      // Get complete message
+      console.log('\nFinal message:', event.data.message.content[0]?.text);
+      break;
+  }
+}
+```
+
+### Tool execution events
+
+Monitor tool calls in real-time:
+
+```typescript
+for await (const event of client.sessions.streamEvents(sessionId)) {
+  switch (event.type) {
+    case 'tool.started':
+      console.log('Tool called:', event.data.tool_call.name);
+      console.log('Arguments:', event.data.tool_call.arguments);
+      break;
+    
+    case 'tool.completed':
+      if (event.data.success) {
+        console.log('Tool result:', event.data.result);
+      } else {
+        console.error('Tool error:', event.data.error);
+      }
+      break;
+  }
+}
+```
+
+### Turn lifecycle events
+
+Track turn execution:
+
+```typescript
+for await (const event of client.sessions.streamEvents(sessionId)) {
+  switch (event.type) {
+    case 'turn.started':
+      console.log('Turn started:', event.data.turn_id);
+      break;
+    
+    case 'turn.completed':
+      console.log('Turn completed in', event.data.duration_ms, 'ms');
+      console.log('Iterations:', event.data.iterations);
+      break;
+    
+    case 'turn.failed':
+      console.error('Turn failed:', event.data.error);
+      console.error('Error code:', event.data.error_code);
+      break;
+    
+    case 'turn.cancelled':
+      console.log('Turn cancelled:', event.data.reason);
+      break;
+  }
+}
+```
+
+### Session state events
+
+Monitor session status:
+
+```typescript
+for await (const event of client.sessions.streamEvents(sessionId)) {
+  switch (event.type) {
+    case 'session.activated':
+      console.log('Session became active');
+      break;
+    
+    case 'session.idled':
+      console.log('Session became idle');
+      console.log('Token usage:', event.data.usage);
+      break;
+  }
+}
+```
+
+## Filtering events
+
+### Filter by type
+
+Only receive specific event types:
+
+```typescript
+// Only turn lifecycle events
+for await (const event of client.sessions.streamEvents(sessionId, {
+  types: ['turn.started', 'turn.completed', 'turn.failed']
+})) {
+  console.log('Turn event:', event.type);
+}
+```
+
+### Exclude events
+
+Remove unwanted events:
+
+```typescript
+// Get all events except deltas (reduce noise)
+for await (const event of client.sessions.streamEvents(sessionId, {
+  exclude: ['output.message.delta', 'reason.thinking.delta']
+})) {
+  console.log('Event:', event.type);
+}
+```
+
+### Combine filters
+
+Use both positive and negative filters:
+
+```typescript
+// Only turn events, but not failures
+for await (const event of client.sessions.streamEvents(sessionId, {
+  types: ['turn.started', 'turn.completed', 'turn.failed'],
+  exclude: ['turn.failed']
+})) {
+  console.log('Turn event:', event.type);
+}
+```
+
+## Resume from event ID
+
+Continue streaming from a specific event:
+
+```typescript
+let lastEventId: string | null = null;
+
+try {
+  for await (const event of client.sessions.streamEvents(sessionId)) {
+    lastEventId = event.id;
+    console.log('Event:', event.type);
+  }
+} catch (error) {
+  // Reconnect from last event
+  console.log('Reconnecting from event:', lastEventId);
+  
+  for await (const event of client.sessions.streamEvents(sessionId, {
+    since_id: lastEventId
+  })) {
+    console.log('Event:', event.type);
+  }
+}
+```
+
+<Note>
+The SDK automatically handles connection cycling and reconnection with `since_id` to ensure no events are missed.
+</Note>
+
+## Extended thinking events
+
+Monitor chain-of-thought reasoning (when using models with extended thinking):
+
+```typescript
+for await (const event of client.sessions.streamEvents(sessionId)) {
+  switch (event.type) {
+    case 'reason.thinking.started':
+      console.log('Model is thinking...');
+      break;
+    
+    case 'reason.thinking.delta':
+      // Stream reasoning content
+      console.log('Thought:', event.data.delta);
+      break;
+    
+    case 'reason.thinking.completed':
+      // Get complete reasoning
+      console.log('Final thinking:', event.data.thinking);
+      break;
+  }
+}
+```
+
+## LLM generation events
+
+Inspect full LLM API calls:
+
+```typescript
+for await (const event of client.sessions.streamEvents(sessionId)) {
+  if (event.type === 'llm.generation') {
+    console.log('Model:', event.data.metadata.model);
+    console.log('Input tokens:', event.data.metadata.usage.input_tokens);
+    console.log('Output tokens:', event.data.metadata.usage.output_tokens);
+    console.log('Duration:', event.data.metadata.duration_ms, 'ms');
+    
+    if (event.data.metadata.success) {
+      console.log('Response:', event.data.output.text);
+    } else {
+      console.error('Error:', event.data.metadata.error);
+    }
+  }
+}
+```
+
+## Real-time usage tracking
+
+Track token usage as it accumulates:
+
+```typescript
+let inputTokens = 0;
+let outputTokens = 0;
+
+for await (const event of client.sessions.streamEvents(sessionId)) {
+  if (event.type === 'llm.generation' && event.data.metadata.usage) {
+    inputTokens += event.data.metadata.usage.input_tokens;
+    outputTokens += event.data.metadata.usage.output_tokens;
+    
+    console.log(`Tokens: ${inputTokens} in, ${outputTokens} out`);
+  }
+  
+  if (event.type === 'session.idled' && event.data.usage) {
+    // Get final cumulative usage
+    console.log('Final usage:', event.data.usage);
+    inputTokens = event.data.usage.input_tokens;
+    outputTokens = event.data.usage.output_tokens;
+  }
+}
+```
+
+## Error handling
+
+### Handle connection errors
+
+```typescript
+try {
+  for await (const event of client.sessions.streamEvents(sessionId)) {
+    console.log('Event:', event.type);
+  }
+} catch (error) {
+  if (error instanceof EverrunsError) {
+    switch (error.status) {
+      case 404:
+        console.error('Session not found');
+        break;
+      case 401:
+        console.error('Authentication required');
+        break;
+      default:
+        console.error('Stream error:', error.message);
+    }
+  } else {
+    console.error('Unexpected error:', error);
+  }
+}
+```
+
+### Handle turn failures
+
+```typescript
+for await (const event of client.sessions.streamEvents(sessionId)) {
+  if (event.type === 'turn.failed') {
+    switch (event.data.error_code) {
+      case 'llm_error':
+        console.error('LLM error:', event.data.error);
+        console.error('Check your API key and provider configuration');
+        break;
+      
+      case 'max_iterations':
+        console.error('Turn exceeded maximum iterations');
+        break;
+      
+      default:
+        console.error('Turn failed:', event.data.error);
+    }
+  }
+}
+```
+
+## Complete examples
+
+### Build a chat UI
+
+```typescript
+import { EverrunsClient } from 'everruns-sdk';
+import readline from 'readline';
+
+const client = new EverrunsClient({
+  baseUrl: 'http://localhost:9300',
+});
+
+async function chat() {
+  // Create session
+  const agent = await client.agents.create({
+    name: 'Chat Assistant',
+    system_prompt: 'You are a helpful assistant.',
+  });
+  
+  const session = await client.sessions.create({
+    agent_id: agent.id,
+  });
+
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  // Send message and stream response
+  async function sendMessage(text: string) {
+    await client.messages.create(session.id, {
+      message: {
+        content: [{ type: 'text', text }]
+      }
+    });
+
+    process.stdout.write('Agent: ');
+    
+    for await (const event of client.sessions.streamEvents(session.id)) {
+      if (event.type === 'output.message.delta') {
+        process.stdout.write(event.data.delta);
+      }
+      
+      if (event.type === 'output.message.completed') {
+        console.log('\n');
+        askQuestion();
+        break;
+      }
+      
+      if (event.type === 'turn.failed') {
+        console.error('\nError:', event.data.error);
+        askQuestion();
+        break;
+      }
+    }
+  }
+
+  function askQuestion() {
+    rl.question('You: ', (answer) => {
+      if (answer.toLowerCase() === 'exit') {
+        rl.close();
+        return;
+      }
+      sendMessage(answer);
+    });
+  }
+
+  console.log('Chat started! Type "exit" to quit.\n');
+  askQuestion();
+}
+
+chat().catch(console.error);
+```
+
+### Monitor tool execution
+
+```typescript
+async function monitorTools(sessionId: string) {
+  const toolCalls = new Map<string, any>();
+
+  for await (const event of client.sessions.streamEvents(sessionId)) {
+    switch (event.type) {
+      case 'tool.started':
+        console.log(`[${event.data.tool_call.id}] Starting: ${event.data.tool_call.name}`);
+        toolCalls.set(event.data.tool_call.id, {
+          name: event.data.tool_call.name,
+          started: Date.now(),
+        });
+        break;
+      
+      case 'tool.completed':
+        const call = toolCalls.get(event.data.tool_call_id);
+        const duration = Date.now() - call.started;
+        
+        console.log(`[${event.data.tool_call_id}] Completed: ${call.name}`);
+        console.log(`  Duration: ${duration}ms`);
+        console.log(`  Status: ${event.data.status}`);
+        
+        if (event.data.success) {
+          console.log(`  Result: ${JSON.stringify(event.data.result)}`);
+        } else {
+          console.log(`  Error: ${event.data.error}`);
+        }
+        
+        toolCalls.delete(event.data.tool_call_id);
+        break;
+    }
+  }
+}
+```
+
+### Track performance metrics
+
+```typescript
+async function trackMetrics(sessionId: string) {
+  const metrics = {
+    turns: 0,
+    totalDuration: 0,
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    toolCalls: 0,
+  };
+
+  for await (const event of client.sessions.streamEvents(sessionId)) {
+    switch (event.type) {
+      case 'turn.completed':
+        metrics.turns++;
+        metrics.totalDuration += event.data.duration_ms;
+        break;
+      
+      case 'llm.generation':
+        if (event.data.metadata.usage) {
+          metrics.totalInputTokens += event.data.metadata.usage.input_tokens;
+          metrics.totalOutputTokens += event.data.metadata.usage.output_tokens;
+        }
+        break;
+      
+      case 'tool.completed':
+        metrics.toolCalls++;
+        break;
+    }
+    
+    // Print metrics periodically
+    if (event.type === 'session.idled') {
+      console.log('Metrics:', {
+        ...metrics,
+        avgTurnDuration: metrics.totalDuration / metrics.turns,
+      });
+    }
+  }
+}
+```
+
+## Best practices
+
+### Handle connection lifecycle
+
+```typescript
+let reconnectAttempts = 0;
+const MAX_RECONNECTS = 5;
+
+async function streamWithRetry(sessionId: string) {
+  while (reconnectAttempts < MAX_RECONNECTS) {
+    try {
+      for await (const event of client.sessions.streamEvents(sessionId)) {
+        // Reset on successful connection
+        reconnectAttempts = 0;
+        
+        // Process event
+        console.log('Event:', event.type);
+      }
+    } catch (error) {
+      reconnectAttempts++;
+      console.error(`Connection lost. Retry ${reconnectAttempts}/${MAX_RECONNECTS}`);
+      
+      if (reconnectAttempts >= MAX_RECONNECTS) {
+        throw error;
+      }
+      
+      // Exponential backoff
+      await new Promise(r => setTimeout(r, Math.min(1000 * Math.pow(2, reconnectAttempts), 30000)));
+    }
+  }
+}
+```
+
+### Use timeouts
+
+```typescript
+async function streamWithTimeout(sessionId: string, timeoutMs: number) {
+  const timeout = new Promise((_, reject) => 
+    setTimeout(() => reject(new Error('Stream timeout')), timeoutMs)
+  );
+
+  const stream = (async () => {
+    for await (const event of client.sessions.streamEvents(sessionId)) {
+      console.log('Event:', event.type);
+      
+      if (event.type === 'output.message.completed') {
+        return;
+      }
+    }
+  })();
+
+  await Promise.race([stream, timeout]);
+}
+```
+
+### Clean event processing
+
+```typescript
+// Create event handlers
+const handlers = {
+  'input.message': (event) => {
+    console.log('User:', event.data.message.content[0]?.text);
+  },
+  'output.message.delta': (event) => {
+    process.stdout.write(event.data.delta);
+  },
+  'output.message.completed': (event) => {
+    console.log('\nAgent done');
+  },
+  'tool.started': (event) => {
+    console.log('Tool:', event.data.tool_call.name);
+  },
+};
+
+// Process events
+for await (const event of client.sessions.streamEvents(sessionId)) {
+  const handler = handlers[event.type];
+  if (handler) {
+    handler(event);
+  }
+}
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+
+<Card title="Messages" icon="message" href="/sdk/messages">
+  Learn about sending messages
+</Card>
+
+<Card title="API Reference" icon="book" href="/api-reference/introduction">
+  Explore the complete API
+</Card>
+
+</CardGroup>

@@ -1,0 +1,133 @@
+---
+title: Create Agent
+description: Create a new agent with configuration
+---
+
+## POST /v1/agents
+
+Create a new agent with the specified configuration. Agents define the system prompt, capabilities, and default model for agentic sessions.
+
+### Request Body
+
+<ParamField path="name" type="string" required>
+  Agent name for display purposes. Maximum 2 KB.
+</ParamField>
+
+<ParamField path="system_prompt" type="string" required>
+  Base system prompt for the agent. Capability prompts will be prepended to this. Maximum 1 MB.
+</ParamField>
+
+<ParamField path="description" type="string">
+  Optional description of the agent's purpose. Maximum 10 KB.
+</ParamField>
+
+<ParamField path="default_model_id" type="string">
+  UUID of the default LLM model to use. Falls back to system default if not specified.
+</ParamField>
+
+<ParamField path="capabilities" type="array">
+  List of capability references to enable. Maximum 250 items.
+  
+  Each capability can be:
+  - Simple string reference: `"current_time"`
+  - Object with config: `{ "ref": "web_fetch", "config": { "timeout_ms": 30000 } }`
+</ParamField>
+
+<ParamField path="id" type="string">
+  Optional client-supplied UUID. If provided, must be a valid UUID v4 or v7.
+</ParamField>
+
+### Response
+
+Returns the created agent object.
+
+<ResponseField name="id" type="string">
+  UUID of the created agent
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Agent name
+</ResponseField>
+
+<ResponseField name="system_prompt" type="string">
+  Base system prompt
+</ResponseField>
+
+<ResponseField name="description" type="string">
+  Optional description
+</ResponseField>
+
+<ResponseField name="default_model_id" type="string">
+  UUID of default model
+</ResponseField>
+
+<ResponseField name="capabilities" type="array">
+  Array of capability references
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Agent status: `active` or `archived`
+</ResponseField>
+
+<ResponseField name="created_at" type="string">
+  ISO 8601 timestamp of creation
+</ResponseField>
+
+<ResponseField name="updated_at" type="string">
+  ISO 8601 timestamp of last update
+</ResponseField>
+
+### Example Request
+
+```bash
+curl -X POST http://localhost:9300/v1/agents \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Research Assistant",
+    "system_prompt": "You are a helpful research assistant with access to web search and file management.",
+    "description": "General purpose research agent",
+    "capabilities": [
+      "current_time",
+      "web_fetch",
+      "session_file_system"
+    ]
+  }'
+```
+
+### Example Response
+
+```json
+{
+  "id": "01933b5a-0000-7000-8000-000000000001",
+  "name": "Research Assistant",
+  "system_prompt": "You are a helpful research assistant with access to web search and file management.",
+  "description": "General purpose research agent",
+  "default_model_id": null,
+  "capabilities": [
+    "current_time",
+    "web_fetch",
+    "session_file_system"
+  ],
+  "status": "active",
+  "created_at": "2024-01-15T10:30:00Z",
+  "updated_at": "2024-01-15T10:30:00Z"
+}
+```
+
+### Input Validation
+
+<Warning>
+  The API enforces size limits as protection against abuse:
+  - Name: 2 KB maximum
+  - Description: 10 KB maximum
+  - System prompt: 1 MB maximum
+  - Capabilities: 250 items maximum
+  
+  Violations return `400 Bad Request` with message "Input exceeds allowed limits".
+</Warning>
+
+### Error Responses
+
+- `400 Bad Request` - Invalid input or size limits exceeded
+- `422 Unprocessable Entity` - Validation error (invalid capability reference)
+- `500 Internal Server Error` - Server error

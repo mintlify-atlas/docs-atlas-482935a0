@@ -1,0 +1,683 @@
+---
+title: Installation
+description: Detailed installation and deployment guide for Everruns
+---
+
+## Overview
+
+This guide covers production-grade installation of Everruns, including Docker Compose setup, environment configuration, multi-instance deployment, and observability integration.
+
+## Deployment Modes
+
+Everruns supports two deployment modes:
+
+<CardGroup cols={2}>
+  <Card title="Development Mode (DEV_MODE)" icon="flask">
+    In-memory storage, no Docker/PostgreSQL required. Perfect for rapid iteration and UI development.
+    
+    ```bash
+    DEV_MODE=true cargo run -p everruns-server
+    ```
+  </Card>
+  
+  <Card title="Production Mode" icon="server">
+    PostgreSQL-backed durable execution with separate workers. Supports HA, persistence, and horizontal scaling.
+    
+    ```bash
+    docker compose up -d
+    ```
+  </Card>
+</CardGroup>
+
+## Architecture
+
+Everruns follows a distributed architecture optimized for reliability and scale:
+
+```mermaid
+graph TB
+    subgraph Internet
+        Client[Clients]
+    end
+    
+    subgraph LoadBalancer["Load Balancer (Optional)"]
+        LB[Caddy / nginx]
+    end
+    
+    subgraph ControlPlane["Control Plane (Stateless)"]
+        Server1[Server Instance 1<br/>:9000 HTTP, :9001 gRPC]
+        Server2[Server Instance 2<br/>:9000 HTTP, :9001 gRPC]
+        Server3[Server Instance 3<br/>:9000 HTTP, :9001 gRPC]
+    end
+    
+    subgraph Workers["Workers (Stateless)"]
+        Worker1[Worker 1]
+        Worker2[Worker 2]
+        Worker3[Worker 3]
+        WorkerN[Worker N...]
+    end
+    
+    subgraph Storage
+        DB[(PostgreSQL<br/>State + Events)]
+    end
+    
+    subgraph Observability
+        Jaeger[Jaeger / OTLP Collector]
+    end
+    
+    Client --> LB
+    LB --> Server1
+    LB --> Server2
+    LB --> Server3
+    
+    Server1 --> DB
+    Server2 --> DB
+    Server3 --> DB
+    
+    Worker1 -->|gRPC| Server1
+    Worker2 -->|gRPC| Server2
+    Worker3 -->|gRPC| Server3
+    WorkerN -->|gRPC| Server1
+    
+    Server1 --> Jaeger
+    Server2 --> Jaeger
+    Server3 --> Jaeger
+    Worker1 --> Jaeger
+    Worker2 --> Jaeger
+    Worker3 --> Jaeger
+```
+
+**Key Components:**
+
+- **Control Plane (Server)**: Stateless HTTP API and gRPC service. Can run multiple instances behind a load balancer.
+- **Workers**: Stateless task executors. Communicate with control plane via gRPC only (no direct database access).
+- **PostgreSQL**: Single source of truth for all state, events, and durable workflows.
+- **Caddy**: Reverse proxy unifying UI and API on a single port.
+
+## Docker Compose Installation
+
+### Prerequisites
+
+- Docker 20.10+
+- Docker Compose 2.0+
+- Python 3 (for generating encryption keys)
+- At least 4GB RAM recommended
+- PostgreSQL 17 support (included in Docker Compose)
+
+### Step 1: Download Configuration
+
+Create a directory and download the Docker Compose file:
+
+```bash
+mkdir everruns && cd everruns
+curl -o docker-compose.yaml https://raw.githubusercontent.com/everruns/everruns/main/examples/docker-compose-full.yaml
+```
+
+The configuration includes:
+
+| Service | Description | Port |
+|---------|-------------|------|
+| `postgres` | PostgreSQL 17 database | 5432 (internal) |
+| `server` | Control plane (HTTP + gRPC) | 9000, 9001 (internal) |
+| `worker-1` | Task executor instance 1 | - |
+| `worker-2` | Task executor instance 2 | - |
+| `worker-3` | Task executor instance 3 | - |
+| `ui` | Next.js dashboard | 9100 (internal) |
+| `caddy` | Reverse proxy | 9300 (public) |
+| `jaeger` | Distributed tracing UI | 16686 |
+
+### Step 2: Configure Environment Variables
+
+Create a `.env` file in the same directory:
+
+```bash
+# ============================================================================
+# Required: Encryption
+# ============================================================================
+# Generate with: python3 -c "import os, base64; print('kek-v1:' + base64.b64encode(os.urandom(32)).decode())"
+SECRETS_ENCRYPTION_KEY=kek-v1:<your-base64-key>
+
+# ============================================================================
+# Required: Worker Authentication
+# ============================================================================
+# Generate with: openssl rand -hex 32
+WORKER_GRPC_AUTH_TOKEN=<your-secure-token>
+
+# ============================================================================
+# Optional: LLM Providers
+# ============================================================================
+# These configure default API keys for built-in providers
+# You can also configure providers via the API after deployment
+DEFAULT_OPENAI_API_KEY=sk-...
+DEFAULT_ANTHROPIC_API_KEY=sk-ant-...
+DEFAULT_GEMINI_API_KEY=...
+
+# ============================================================================
+# Optional: Database Configuration
+# ============================================================================
+# Connection pool size (default: 10)
+# Set to pg_max_connections / expected_instances - margin
+DATABASE_POOL_MAX=10
+
+# ============================================================================
+# Optional: Multi-Instance HA
+# ============================================================================
+# Number of server instances (for SSE limits and pool sizing)
+EXPECTED_INSTANCES=1
+
+# ============================================================================
+# Optional: Observability
+# ============================================================================
+# OTLP endpoint (default: Jaeger in Docker Compose)
+OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318
+OTEL_SERVICE_NAME=everruns
+OTEL_ENVIRONMENT=production
+
+# ============================================================================
+# Optional: HTTP/2 Flow Control
+# ============================================================================
+# Per-stream window (default: 2 MB)
+HTTP2_STREAM_WINDOW_SIZE=2097152
+# Per-connection window (default: 16 MB)
+HTTP2_CONNECTION_WINDOW_SIZE=16777216
+# Max concurrent streams per connection (default: 256)
+HTTP2_MAX_CONCURRENT_STREAMS=256
+```
+
+<Warning>
+  **Security**: The `SECRETS_ENCRYPTION_KEY` protects all encrypted data (API keys, secrets). Store it securely and never commit it to version control. If lost, encrypted data cannot be recovered.
+</Warning>
+
+<Warning>
+  **Worker Authentication**: The `WORKER_GRPC_AUTH_TOKEN` is required in production. The server will panic on startup if this is not set. Generate a strong random value and keep it secret.
+</Warning>
+
+### Step 3: Start Services
+
+Launch the stack:
+
+```bash
+docker compose up -d
+```
+
+Check status:
+
+```bash
+docker compose ps
+```
+
+View logs:
+
+```bash
+# All services
+docker compose logs -f
+
+# Specific service
+docker compose logs -f server
+```
+
+### Step 4: Verify Deployment
+
+Test the health endpoint:
+
+```bash
+curl http://localhost:9300/api/health
+```
+
+Expected response:
+
+```json
+{
+  "status": "healthy",
+  "version": "0.2.0",
+  "runner_mode": "durable"
+}
+```
+
+Access the web UI: http://localhost:9300
+
+View traces in Jaeger: http://localhost:16686
+
+## Environment Variables Reference
+
+### Core Configuration
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `SECRETS_ENCRYPTION_KEY` | Yes | - | Encryption key (format: `kek-v1:<base64>`) |
+| `DATABASE_URL` | Yes | - | PostgreSQL connection string |
+| `HOST` | No | `0.0.0.0` | HTTP server bind address |
+| `PORT` | No | `9000` | HTTP server port |
+| `DEV_MODE` | No | `false` | Enable in-memory mode (no PostgreSQL) |
+
+### Worker Configuration
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `WORKER_GRPC_ADDRESS` | Yes | - | Control plane gRPC address (e.g., `server:9001`) |
+| `WORKER_GRPC_AUTH_TOKEN` | Yes* | - | Bearer token for gRPC auth (*required in production) |
+| `WORKER_GRPC_TLS_ENABLED` | No | `false` | Enable mTLS |
+| `WORKER_GRPC_TLS_CERT` | No | - | Client certificate (PEM) |
+| `WORKER_GRPC_TLS_KEY` | No | - | Client private key (PEM) |
+| `WORKER_GRPC_TLS_CA` | No | - | CA certificate for server verification |
+
+### LLM Providers
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `DEFAULT_OPENAI_API_KEY` | No | - | Default OpenAI API key |
+| `DEFAULT_ANTHROPIC_API_KEY` | No | - | Default Anthropic API key |
+| `DEFAULT_GEMINI_API_KEY` | No | - | Default Google Gemini API key |
+
+### Database
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `DATABASE_POOL_MAX` | No | `10` | Max connections per instance |
+| `DATABASE_POOL_MIN` | No | `2` | Min idle connections |
+| `DATABASE_POOL_ACQUIRE_TIMEOUT_SECS` | No | `30` | Connection acquire timeout |
+
+### Multi-Instance HA
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `EXPECTED_INSTANCES` | No | `1` | Number of server instances |
+
+See [Multi-Instance Deployment](#multi-instance-deployment) for details.
+
+### Observability
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | No | - | OTLP endpoint (e.g., `http://localhost:4318`) |
+| `OTEL_SERVICE_NAME` | No | `everruns` | Service name for traces |
+| `OTEL_ENVIRONMENT` | No | `production` | Environment label |
+| `RUST_LOG` | No | `info` | Log level (trace, debug, info, warn, error) |
+
+### HTTP/2 Configuration
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `HTTP2_STREAM_WINDOW_SIZE` | No | `2097152` | Per-stream flow control window (2 MB) |
+| `HTTP2_CONNECTION_WINDOW_SIZE` | No | `16777216` | Per-connection window (16 MB) |
+| `HTTP2_MAX_CONCURRENT_STREAMS` | No | `256` | Max concurrent streams per connection |
+
+<Tip>
+  HTTP/2 flow control tuning is critical for high-concurrency SSE. The defaults are optimized for many slow-reading clients. Increase if you see stream blocking.
+</Tip>
+
+## Multi-Instance Deployment
+
+Run multiple control plane instances behind a load balancer for high availability.
+
+### What's Multi-Instance Safe
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| PostgreSQL | Safe | Shared database with connection pooling |
+| Migrations | Safe | Advisory lock protected |
+| Task claiming | Safe | `SKIP LOCKED` naturally partitions work |
+| Worker registration | Safe | Database-backed, any server serves any worker |
+| PgListener (tasks) | Safe | Each instance has its own listener; all receive NOTIFY |
+| PgListener (events) | Safe | SSE clients on any instance see all events |
+
+### Configuration
+
+Set `EXPECTED_INSTANCES=N` to inform each instance about the total count:
+
+```bash
+EXPECTED_INSTANCES=3
+```
+
+Effects:
+
+- **SSE connection limits**: Global and per-org limits divided by N. Per-session limits unchanged.
+- **Database pool sizing**: Set `DATABASE_POOL_MAX = pg_max_connections / N - margin`. Startup warning fires if pool × instances exceeds 80% of `PG_MAX_CONNECTIONS` (default 100).
+- **Metrics**: Each instance maintains its own ring buffer. The `/v1/durable/metrics/timeseries` response includes `instance_count` when >1.
+
+### Load Balancer Requirements
+
+- **Protocol**: HTTP/1.1 or HTTP/2 for SSE (long-lived connections)
+- **Health check**: `GET /health`
+- **Session affinity**: Not required (stateless API; SSE reconnects are idempotent)
+- **Timeouts**: Set upstream timeout > 5 minutes for SSE connections
+
+### Example: nginx Load Balancer
+
+```nginx
+upstream everruns_backend {
+    # Round-robin (default)
+    server server1:9000;
+    server server2:9000;
+    server server3:9000;
+    
+    # Health checks
+    check interval=10000 rise=2 fall=3 timeout=5000 type=http;
+    check_http_send "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
+    check_http_expect_alive http_2xx;
+}
+
+server {
+    listen 80;
+    
+    location / {
+        proxy_pass http://everruns_backend;
+        proxy_http_version 1.1;
+        
+        # SSE support
+        proxy_set_header Connection '';
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 600s;
+    }
+}
+```
+
+### Database Pool Sizing
+
+With 3 server instances and PostgreSQL default (`max_connections=100`):
+
+```bash
+# Each instance should use:
+DATABASE_POOL_MAX=30  # 3 instances × 30 = 90 connections (< 100)
+```
+
+Startup warning appears if `pool_max × instances > 80` (80% of default 100).
+
+## PostgreSQL Configuration
+
+### Standalone PostgreSQL
+
+If using an external PostgreSQL instance:
+
+```bash
+DATABASE_URL=postgres://user:password@host:5432/everruns
+```
+
+Everruns requires:
+
+- **PostgreSQL 17+** (for UUID v7 function)
+- **`pg_trgm` extension** (for full-text search)
+- **Advisory locks** (for migration safety)
+
+### Schema Migrations
+
+Migrations are embedded in the `everruns-server` binary and auto-applied on startup.
+
+**Disable auto-migrations** (e.g., for managed environments):
+
+```bash
+everruns-server --no-migrations
+```
+
+Manually apply migrations:
+
+```bash
+sqlx migrate run --source crates/server/migrations/
+```
+
+### Database Tables
+
+Everruns creates these tables:
+
+- `agents`, `harnesses`, `sessions` - Core entities
+- `events` - Append-only event log (messages, turns, tool calls)
+- `session_files` - Virtual filesystem storage
+- `session_kv`, `session_secrets` - Session-scoped storage
+- `llm_providers`, `llm_models` - LLM configuration
+- `mcp_servers` - MCP server registry
+- `durable_*` - Durable execution engine (workflows, tasks, workers)
+
+## Worker Scaling
+
+Workers are stateless and can be scaled horizontally.
+
+### Add More Workers
+
+Edit `docker-compose.yaml` to add worker instances:
+
+```yaml
+worker-4:
+  image: ghcr.io/everruns/everruns-worker:${EVERRUNS_TAG:-latest}
+  container_name: everruns-worker-4
+  environment:
+    WORKER_GRPC_ADDRESS: server:9001
+    WORKER_GRPC_AUTH_TOKEN: ${WORKER_GRPC_AUTH_TOKEN}
+    RUST_LOG: info
+    OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+  depends_on:
+    server:
+      condition: service_started
+  restart: unless-stopped
+```
+
+Restart:
+
+```bash
+docker compose up -d
+```
+
+### Worker Task Distribution
+
+Workers use **push-based task distribution** via gRPC streaming:
+
+1. Workers subscribe to `SubscribeTaskNotifications` stream
+2. Control plane listens to PostgreSQL `NOTIFY` on channel `task_available`
+3. When a task is enqueued, trigger fires `NOTIFY` with activity type
+4. Control plane broadcasts to subscribed workers
+5. Workers claim tasks via `ClaimDurableTasks` gRPC call
+6. Fallback: Workers poll every 10s if stream disconnects
+
+**Latency improvement**:
+- Polling (100ms): P50 ~100ms, P99 ~110ms
+- Push notifications: P50 ~4ms, P99 ~10ms (~96% improvement)
+
+### Worker Heartbeats
+
+Workers send heartbeats every 5 seconds. Stale workers (no heartbeat for 60s) are:
+
+- Marked as `stopped`
+- Tasks reclaimed and re-queued
+- Removed from active worker count
+
+## Observability
+
+### OpenTelemetry Traces
+
+Everruns exports traces to any OTLP-compatible backend.
+
+**Jaeger** (included in Docker Compose):
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318
+```
+
+Access Jaeger UI: http://localhost:16686
+
+**Braintrust**:
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=https://api.braintrust.dev/otel
+OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer sk-..."
+```
+
+**Datadog**:
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://datadog-agent:4318
+```
+
+### Gen-AI Semantic Conventions
+
+LLM operations are instrumented with [OpenTelemetry Gen-AI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/):
+
+- `chat {model}` spans for LLM calls
+- `execute_tool {name}` spans for tool execution
+- `invoke_agent {turn_id}` spans for turns
+
+Attributes include:
+- `gen_ai.system` (e.g., `openai`, `anthropic`)
+- `gen_ai.request.model` (e.g., `gpt-4o`)
+- `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`
+- `gen_ai.response.finish_reasons`
+
+### Metrics Dashboard
+
+The web UI includes a real-time metrics dashboard at `/durable`:
+
+- **Workflow Status** - Running/pending workflows, completion/failure rates
+- **Task Status** - Pending/claimed tasks, completion/failure rates
+- **Throughput** - Tasks completed/failed per interval
+- **System Load** - Load percentage, active workers, DLQ size
+
+Data is sampled every 10 seconds and stored in a server-side ring buffer (360 points = 1 hour history).
+
+REST endpoint for programmatic access:
+
+```bash
+curl http://localhost:9300/api/v1/durable/metrics/timeseries
+```
+
+## Security
+
+### Encryption
+
+**Secrets Encryption**: API keys, tokens, and session secrets are encrypted at rest using AES-256-GCM envelope encryption.
+
+**Key Management**:
+- Generate with: `python3 -c "import os, base64; print('kek-v1:' + base64.b64encode(os.urandom(32)).decode())"`
+- Store in `SECRETS_ENCRYPTION_KEY` environment variable
+- Rotate by re-encrypting data with new key (manual process)
+
+**Key Loss**: If the encryption key is lost, encrypted data cannot be recovered. Back up the key securely.
+
+### Worker Authentication
+
+**Bearer Token** (required in production):
+
+```bash
+WORKER_GRPC_AUTH_TOKEN=<secure-random-token>
+```
+
+Server panics on startup if not set in production.
+
+**Mutual TLS** (optional, for transport encryption + identity verification):
+
+```bash
+WORKER_GRPC_TLS_ENABLED=true
+WORKER_GRPC_TLS_CERT=/path/to/client.crt
+WORKER_GRPC_TLS_KEY=/path/to/client.key
+WORKER_GRPC_TLS_CA=/path/to/ca.crt
+```
+
+### Network Isolation
+
+In the Docker Compose setup:
+
+- **Public**: Caddy reverse proxy (port 9300)
+- **Internal**: Server HTTP/gRPC, PostgreSQL, Jaeger
+- **Workers**: No exposed ports, gRPC-only communication
+
+For production, run workers in a separate network with firewall rules restricting access to the control plane gRPC port.
+
+## Backup and Recovery
+
+### Database Backup
+
+All state is in PostgreSQL. Use standard PostgreSQL backup tools:
+
+```bash
+# Dump
+docker compose exec postgres pg_dump -U everruns everruns > backup.sql
+
+# Restore
+docker compose exec -T postgres psql -U everruns everruns < backup.sql
+```
+
+For production, use continuous archiving (WAL archiving) and point-in-time recovery (PITR).
+
+### Encryption Key Backup
+
+Back up `SECRETS_ENCRYPTION_KEY` to a secure location. Without it, encrypted data is unrecoverable.
+
+## Troubleshooting
+
+### Server won't start
+
+**Symptom**: Server exits immediately or logs show panic.
+
+**Check**:
+1. `SECRETS_ENCRYPTION_KEY` is set and valid
+2. `DATABASE_URL` is correct and PostgreSQL is reachable
+3. `WORKER_GRPC_AUTH_TOKEN` is set (production)
+
+**Logs**:
+```bash
+docker compose logs server
+```
+
+### Workers can't connect
+
+**Symptom**: Workers log "connection refused" or "authentication failed".
+
+**Check**:
+1. `WORKER_GRPC_ADDRESS` points to server (e.g., `server:9001`)
+2. `WORKER_GRPC_AUTH_TOKEN` matches server token
+3. Server gRPC port (9001) is accessible from workers
+
+**Logs**:
+```bash
+docker compose logs worker-1
+```
+
+### Tasks not executing
+
+**Symptom**: Messages sent but no agent response.
+
+**Check**:
+1. Workers are running and healthy
+2. LLM API key is configured
+3. Model is available and not rate-limited
+
+**Debug**:
+```bash
+# Check system health
+curl http://localhost:9300/api/v1/durable/health
+
+# Check workers
+curl http://localhost:9300/api/v1/durable/workers
+
+# View pending tasks
+curl http://localhost:9300/api/v1/durable/tasks
+```
+
+### High database connections
+
+**Symptom**: PostgreSQL logs "too many connections".
+
+**Solution**:
+1. Reduce `DATABASE_POOL_MAX` per instance
+2. Increase PostgreSQL `max_connections`
+3. Set `EXPECTED_INSTANCES` correctly
+
+**Check pool usage**:
+```bash
+# PostgreSQL
+SELECT count(*) FROM pg_stat_activity WHERE datname = 'everruns';
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Core Concepts" icon="book" href="/concepts">
+    Understand harnesses, agents, sessions, and the execution model
+  </Card>
+  <Card title="API Reference" icon="code" href="/api-reference">
+    Explore the REST API for programmatic access
+  </Card>
+  <Card title="Capabilities" icon="puzzle-piece" href="/capabilities">
+    Learn about built-in capabilities and MCP integration
+  </Card>
+  <Card title="Deployment" icon="rocket" href="/deployment">
+    Production deployment guides for AWS, GCP, and Kubernetes
+  </Card>
+</CardGroup>

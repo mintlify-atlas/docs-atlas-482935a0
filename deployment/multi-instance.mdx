@@ -1,0 +1,566 @@
+---
+title: Multi-Instance Deployment
+description: Deploy multiple Everruns server instances for high availability
+---
+
+Everruns supports running multiple server instances behind a load balancer for high availability and horizontal scaling.
+
+## Overview
+
+Multiple control-plane instances can run concurrently, all connected to the same PostgreSQL database. Workers can connect to any instance and will claim tasks from a shared queue.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────┐
+│            Load Balancer (HTTP/2)               │
+│          Health check: GET /health              │
+└─────────────────────────────────────────────────┘
+          │                │                │
+          ▼                ▼                ▼
+    ┌──────────┐     ┌──────────┐     ┌──────────┐
+    │ Server 1 │     │ Server 2 │     │ Server 3 │
+    │ :9000    │     │ :9000    │     │ :9000    │
+    │ :9001    │     │ :9001    │     │ :9001    │
+    └──────────┘     └──────────┘     └──────────┘
+          │                │                │
+          └────────────────┴────────────────┘
+                          │
+                          ▼
+                  ┌───────────────┐
+                  │  PostgreSQL   │
+                  │  (Shared DB)  │
+                  └───────────────┘
+                          │
+          ┌───────────────┴───────────────┐
+          │                               │
+          ▼                               ▼
+    ┌──────────┐                    ┌──────────┐
+    │ Worker 1 │ ... (N workers)    │ Worker N │
+    └──────────┘                    └──────────┘
+```
+
+### What's Multi-Instance Safe
+
+| Component | Reason |
+|-----------|--------|
+| PostgreSQL database | Shared, connection pool per instance |
+| Database migrations | Advisory lock protected |
+| Task claiming | `SELECT ... FOR UPDATE SKIP LOCKED` partitions work |
+| Worker registration | Database-backed, any server can serve any worker |
+| PgListener (task_available) | Each instance runs its own listener; all receive NOTIFY |
+| PgListener (event_available) | Same; SSE clients on any instance see all events |
+
+## Configuration
+
+### EXPECTED_INSTANCES
+
+Set `EXPECTED_INSTANCES` to inform each instance about the total count:
+
+```bash
+EXPECTED_INSTANCES=3
+```
+
+This setting affects:
+
+1. **SSE Connection Limits**
+   - Global and per-org limits divided by N
+   - Per-session limits unchanged (full limit on each instance)
+   - Prevents total connection count from exceeding desired limits
+
+2. **Database Pool Sizing**
+   - Set `DATABASE_POOL_MAX = pg_max_connections / N - margin`
+   - A startup warning fires if `pool × instances` exceeds 80% of `PG_MAX_CONNECTIONS` (default 100)
+   - Prevents connection exhaustion
+
+3. **Metrics Aggregation**
+   - Each instance maintains its own ring buffer
+   - `/v1/durable/metrics/timeseries` response includes `instance_count` field when > 1
+   - Helps interpret per-instance metrics
+
+### Example: 3-Instance Deployment
+
+```bash
+# Each server instance
+EXPECTED_INSTANCES=3
+DATABASE_POOL_MAX=25
+
+# PostgreSQL configuration
+# max_connections = 100 (default)
+# Used: 3 instances × 25 connections = 75
+# Margin: 25 connections (25%)
+```
+
+### Database Pool Calculation
+
+Formula:
+```
+DATABASE_POOL_MAX = (PG_MAX_CONNECTIONS - MARGIN) / EXPECTED_INSTANCES
+```
+
+Example with PostgreSQL `max_connections=100`:
+
+| Instances | Pool per Instance | Total Used | Margin |
+|-----------|-------------------|------------|--------|
+| 1 | 80 | 80 | 20 |
+| 2 | 40 | 80 | 20 |
+| 3 | 25 | 75 | 25 |
+| 4 | 20 | 80 | 20 |
+
+**Startup validation**: Server warns if `DATABASE_POOL_MAX × EXPECTED_INSTANCES` exceeds 80% of `PG_MAX_CONNECTIONS`.
+
+## Load Balancer Requirements
+
+### Protocol Support
+
+- **HTTP/1.1 or HTTP/2** required for SSE (long-lived connections)
+- No HTTP/1.0 (doesn't support chunked transfer encoding for SSE)
+
+### Health Check
+
+```bash
+GET /health
+```
+
+Response:
+```json
+{
+  "status": "ok"
+}
+```
+
+- Returns 200 OK if server is healthy
+- Returns 503 Service Unavailable if unhealthy
+- Check interval: 10-30 seconds recommended
+
+### Session Affinity
+
+**Not required**. Everruns is designed to be stateless:
+
+- API requests are stateless
+- SSE connections reconnect automatically on disconnection
+- Database provides shared state across instances
+
+### Timeouts
+
+**Important for SSE**: Configure appropriate timeouts for long-lived connections
+
+```nginx
+# Nginx example
+proxy_read_timeout 300s;  # 5 minutes
+proxy_connect_timeout 10s;
+proxy_send_timeout 10s;
+```
+
+Everruns server cycles SSE connections every 5 minutes by sending a `disconnecting` event. Clients automatically reconnect.
+
+## HTTP/2 Flow Control
+
+Critical for high-concurrency SSE deployments.
+
+### The Problem
+
+HTTP/2 uses flow control to prevent fast senders from overwhelming slow receivers. The default per-stream window (65 KB) is too small for many concurrent SSE streams, leading to:
+
+- Stream blocking when window exhausted
+- Cascade timeouts
+- Connection stalls
+
+### The Solution
+
+Everruns exposes HTTP/2 configuration knobs:
+
+```bash
+# Per-stream flow control window (default: 2 MB)
+HTTP2_STREAM_WINDOW_SIZE=2097152
+
+# Per-connection flow control window (default: 16 MB)
+HTTP2_CONNECTION_WINDOW_SIZE=16777216
+
+# Max concurrent streams per connection (default: 256)
+HTTP2_MAX_CONCURRENT_STREAMS=256
+```
+
+### Tuning Guidelines
+
+**High event throughput**:
+```bash
+HTTP2_STREAM_WINDOW_SIZE=4194304      # 4 MB
+HTTP2_CONNECTION_WINDOW_SIZE=33554432  # 32 MB
+```
+
+**Many slow clients**:
+```bash
+HTTP2_STREAM_WINDOW_SIZE=8388608       # 8 MB
+HTTP2_CONNECTION_WINDOW_SIZE=67108864  # 64 MB
+```
+
+**Memory-constrained**:
+```bash
+HTTP2_STREAM_WINDOW_SIZE=1048576       # 1 MB
+HTTP2_CONNECTION_WINDOW_SIZE=8388608   # 8 MB
+```
+
+### Adaptive Flow Control
+
+Everruns enables HTTP/2 adaptive flow control (hyper auto-adjusts windows based on throughput).
+
+HTTP/2 PING keepalive runs every 20s to detect dead connections.
+
+## Docker Compose Example
+
+### 3-Server + Load Balancer
+
+```yaml
+services:
+  # PostgreSQL (shared)
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: everruns
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: everruns
+      # Increase max_connections for multi-instance
+      POSTGRES_INITDB_ARGS: "-c max_connections=200"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    command:
+      - "postgres"
+      - "-c"
+      - "max_connections=200"
+
+  # Server instances
+  server-1:
+    image: ghcr.io/everruns/everruns-server:latest
+    environment:
+      DATABASE_URL: postgres://everruns:${POSTGRES_PASSWORD}@postgres:5432/everruns
+      SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY}
+      WORKER_GRPC_AUTH_TOKEN: ${WORKER_GRPC_AUTH_TOKEN}
+      EXPECTED_INSTANCES: 3
+      DATABASE_POOL_MAX: 50
+      PG_MAX_CONNECTIONS: 200
+      HOST: 0.0.0.0
+      PORT: "9000"
+    depends_on:
+      - postgres
+
+  server-2:
+    image: ghcr.io/everruns/everruns-server:latest
+    environment:
+      DATABASE_URL: postgres://everruns:${POSTGRES_PASSWORD}@postgres:5432/everruns
+      SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY}
+      WORKER_GRPC_AUTH_TOKEN: ${WORKER_GRPC_AUTH_TOKEN}
+      EXPECTED_INSTANCES: 3
+      DATABASE_POOL_MAX: 50
+      PG_MAX_CONNECTIONS: 200
+      HOST: 0.0.0.0
+      PORT: "9000"
+    depends_on:
+      - postgres
+
+  server-3:
+    image: ghcr.io/everruns/everruns-server:latest
+    environment:
+      DATABASE_URL: postgres://everruns:${POSTGRES_PASSWORD}@postgres:5432/everruns
+      SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY}
+      WORKER_GRPC_AUTH_TOKEN: ${WORKER_GRPC_AUTH_TOKEN}
+      EXPECTED_INSTANCES: 3
+      DATABASE_POOL_MAX: 50
+      PG_MAX_CONNECTIONS: 200
+      HOST: 0.0.0.0
+      PORT: "9000"
+    depends_on:
+      - postgres
+
+  # Caddy load balancer
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "9300:9300"
+    configs:
+      - source: caddyfile
+        target: /etc/caddy/Caddyfile
+    depends_on:
+      - server-1
+      - server-2
+      - server-3
+
+  # Workers (can connect to any server)
+  worker-1:
+    image: ghcr.io/everruns/everruns-worker:latest
+    environment:
+      WORKER_GRPC_ADDRESS: server-1:9001  # Or load balance gRPC too
+      WORKER_GRPC_AUTH_TOKEN: ${WORKER_GRPC_AUTH_TOKEN}
+    depends_on:
+      - server-1
+
+configs:
+  caddyfile:
+    content: |
+      :9300 {
+        # Load balance across servers
+        reverse_proxy server-1:9000 server-2:9000 server-3:9000 {
+          # Health check
+          health_uri /health
+          health_interval 10s
+          health_timeout 5s
+          
+          # SSE requires no buffering
+          flush_interval -1
+        }
+      }
+
+volumes:
+  postgres_data:
+```
+
+## Migration Safety
+
+Database migrations are safe in multi-instance deployments:
+
+1. **Advisory Lock**: First instance to start acquires PostgreSQL advisory lock
+2. **Serial Execution**: Other instances wait for migrations to complete
+3. **Lock Release**: Lock released after migrations finish
+4. **No Race Conditions**: Only one instance runs migrations
+
+### Disable Auto-Migrations
+
+For controlled migration execution:
+
+```yaml
+server-1:
+  # No flag - runs migrations
+  image: ghcr.io/everruns/everruns-server:latest
+
+server-2:
+  # Skip migrations
+  image: ghcr.io/everruns/everruns-server:latest
+  command: ["--no-migrations"]
+
+server-3:
+  # Skip migrations
+  image: ghcr.io/everruns/everruns-server:latest
+  command: ["--no-migrations"]
+```
+
+Or run migrations manually before starting instances:
+
+```bash
+# Run migrations once
+docker run --rm \
+  -e DATABASE_URL=postgres://... \
+  ghcr.io/everruns/everruns-server:latest \
+  migrate
+
+# Start all instances with --no-migrations
+docker compose up -d
+```
+
+## Worker Distribution
+
+Workers can connect to any server instance. Task claiming is handled by the database:
+
+### Task Claiming Flow
+
+1. Worker polls server via gRPC: `ClaimDurableTasks`
+2. Server queries database: `SELECT ... FOR UPDATE SKIP LOCKED`
+3. Database atomically assigns task to one worker
+4. Worker executes task
+5. Worker reports completion to any server instance
+
+**Key insight**: `SKIP LOCKED` ensures no two workers claim the same task, even if connected to different server instances.
+
+### Worker Load Balancing
+
+You can:
+
+**Option 1**: Point all workers to one server
+```bash
+WORKER_GRPC_ADDRESS=server-1:9001
+```
+
+**Option 2**: Distribute workers across servers
+```yaml
+worker-1:
+  environment:
+    WORKER_GRPC_ADDRESS: server-1:9001
+
+worker-2:
+  environment:
+    WORKER_GRPC_ADDRESS: server-2:9001
+
+worker-3:
+  environment:
+    WORKER_GRPC_ADDRESS: server-3:9001
+```
+
+**Option 3**: Use DNS round-robin or gRPC load balancer
+
+All options are safe - task claiming is always database-coordinated.
+
+## SSE Event Distribution
+
+Server-Sent Events (SSE) work correctly in multi-instance deployments:
+
+### Event Flow
+
+1. Event written to database by any instance
+2. PostgreSQL NOTIFY sent to `event_available` channel
+3. All instances receive notification (each has PgListener)
+4. Each instance checks for SSE clients subscribed to that session
+5. Matching clients receive event
+
+**Result**: Clients connected to any instance see all events, regardless of which instance wrote the event.
+
+### Connection Distribution
+
+SSE clients may connect to different instances:
+
+- Load balancer distributes connections
+- No session affinity required
+- Reconnections may land on different instance
+- Event stream remains consistent
+
+## Monitoring
+
+### Per-Instance Metrics
+
+Each instance exposes metrics at `/v1/durable/metrics/timeseries`:
+
+```json
+{
+  "instance_count": 3,
+  "metrics": {
+    "task_claimed": [...],
+    "task_completed": [...]
+  }
+}
+```
+
+**Note**: Metrics are per-instance. Aggregate across instances for cluster-wide view.
+
+### Database Metrics
+
+Monitor PostgreSQL:
+
+```sql
+-- Active connections per instance (requires tracking)
+SELECT application_name, count(*) 
+FROM pg_stat_activity 
+WHERE datname = 'everruns' 
+GROUP BY application_name;
+
+-- Total connections
+SELECT count(*) FROM pg_stat_activity WHERE datname = 'everruns';
+
+-- Max connections setting
+SHOW max_connections;
+```
+
+### Health Monitoring
+
+Monitor each instance:
+
+```bash
+# Health check all instances
+curl http://server-1:9000/health
+curl http://server-2:9000/health
+curl http://server-3:9000/health
+```
+
+Healthy response:
+```json
+{"status": "ok"}
+```
+
+## Scaling Guidelines
+
+### When to Add Instances
+
+Add server instances when:
+
+- CPU usage consistently > 70%
+- API response times increasing
+- SSE connection limits reached
+- High request rate during peak traffic
+
+### Horizontal Scaling
+
+**Servers**: Scale horizontally
+- Add more instances behind load balancer
+- Update `EXPECTED_INSTANCES`
+- Adjust `DATABASE_POOL_MAX`
+
+**Workers**: Scale horizontally
+- Add more worker containers/processes
+- Workers are stateless and scale linearly
+- Monitor task queue depth
+
+**Database**: Scale vertically (managed PostgreSQL)
+- Increase CPU/memory for higher throughput
+- Increase `max_connections` for more instances
+- Consider read replicas for read-heavy workloads (future)
+
+### Resource Planning
+
+| Component | Scaling Strategy | Bottleneck |
+|-----------|------------------|------------|
+| Server | Horizontal (instances) | CPU, SSE connections |
+| Worker | Horizontal (workers) | CPU (LLM calls are I/O) |
+| Database | Vertical (bigger instance) | CPU, connections, IOPS |
+
+## Troubleshooting
+
+### Connection Pool Exhaustion
+
+**Symptom**: Errors like `connection pool timeout`
+
+**Diagnosis**:
+```sql
+SELECT count(*) FROM pg_stat_activity WHERE datname = 'everruns';
+SHOW max_connections;
+```
+
+**Solutions**:
+1. Reduce `DATABASE_POOL_MAX` per instance
+2. Increase PostgreSQL `max_connections`
+3. Reduce `EXPECTED_INSTANCES` (if overestimated)
+
+### Split-Brain (Not Possible)
+
+Everruns cannot experience split-brain because:
+
+- All state stored in PostgreSQL
+- No in-memory state shared across instances
+- No consensus protocol needed
+- Database provides serialization
+
+### Uneven Load Distribution
+
+**Symptom**: One instance handling most traffic
+
+**Solutions**:
+1. Check load balancer algorithm (use round-robin or least-connections)
+2. Verify all instances are healthy
+3. Check for long-lived connections (SSE) pinning clients to one instance
+
+## Production Checklist
+
+- [ ] Set `EXPECTED_INSTANCES` to actual instance count
+- [ ] Calculate and set appropriate `DATABASE_POOL_MAX`
+- [ ] Verify PostgreSQL `max_connections` is sufficient
+- [ ] Configure load balancer health checks
+- [ ] Set appropriate timeouts for SSE (5+ minutes)
+- [ ] Tune HTTP/2 flow control for workload
+- [ ] Monitor connection pool usage
+- [ ] Monitor per-instance health
+- [ ] Set up alerting for unhealthy instances
+- [ ] Test failover (kill one instance, verify others handle traffic)
+- [ ] Test migration safety (restart all instances, verify migrations run once)
+- [ ] Document instance count for operations team
+
+## Next Steps
+
+- [Environment variables reference](/deployment/environment-variables)
+- [Docker Compose deployment](/deployment/docker-compose)
+- [Authentication configuration](/deployment/authentication)

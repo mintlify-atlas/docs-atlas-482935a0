@@ -1,0 +1,253 @@
+---
+title: "Get Capability"
+description: "Get details for a specific capability"
+---
+
+## GET /v1/capabilities/{capability_id}
+
+Get detailed information about a specific capability, including its tools, system prompt contributions, and configuration options.
+
+### Path Parameters
+
+<ParamField path="capability_id" type="string" required>
+  The capability identifier. Format:
+  - Built-in: `snake_case` (e.g., `current_time`, `web_fetch`)
+  - MCP: `mcp:{server_uuid}` (e.g., `mcp:01933b5a-0000-7000-8000-000000000501`)
+</ParamField>
+
+### Response
+
+<ResponseField name="id" type="string">
+  Capability identifier
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Display name
+</ResponseField>
+
+<ResponseField name="description" type="string">
+  Description of functionality (supports GitHub Flavored Markdown)
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Availability status: `available`, `experimental`, `deprecated`
+</ResponseField>
+
+<ResponseField name="icon" type="string">
+  Icon name for UI rendering
+</ResponseField>
+
+<ResponseField name="category" type="string">
+  Category for grouping in UI
+</ResponseField>
+
+<ResponseField name="is_mcp" type="boolean">
+  `true` if this is an MCP virtual capability
+</ResponseField>
+
+<ResponseField name="dependencies" type="array">
+  IDs of capabilities this capability depends on
+</ResponseField>
+
+<ResponseField name="features" type="array">
+  UI feature strings this capability contributes to
+</ResponseField>
+
+<ResponseField name="risk_level" type="string">
+  Risk classification: `low` (default, omitted), `medium`, `high`
+</ResponseField>
+
+### Example Request
+
+```bash
+curl https://api.everruns.com/v1/capabilities/web_fetch \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+### Example Response (Built-in Capability)
+
+```json
+{
+  "id": "web_fetch",
+  "name": "Web Fetch",
+  "description": "Fetch content from URLs and convert HTML to markdown.\n\n> [!TIP]\n> Use `as_markdown: true` for better readability when fetching HTML pages.\n\n> [!WARNING]\n> Binary content (images, PDFs) cannot be fetched as text. Only metadata is returned.",
+  "status": "available",
+  "icon": "globe",
+  "category": "Network",
+  "is_mcp": false,
+  "dependencies": [],
+  "features": [],
+  "risk_level": "high"
+}
+```
+
+### Example Request (MCP Capability)
+
+```bash
+curl https://api.everruns.com/v1/capabilities/mcp:01933b5a-0000-7000-8000-000000000501 \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+### Example Response (MCP Capability)
+
+```json
+{
+  "id": "mcp:01933b5a-0000-7000-8000-000000000501",
+  "name": "GitHub",
+  "description": "GitHub API integration via MCP",
+  "status": "available",
+  "icon": "plug",
+  "category": "MCP Servers",
+  "is_mcp": true,
+  "dependencies": [],
+  "features": []
+}
+```
+
+### Example with Dependencies
+
+```bash
+curl https://api.everruns.com/v1/capabilities/virtual_bash \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+```json
+{
+  "id": "virtual_bash",
+  "name": "Virtual Bash",
+  "description": "Sandboxed bash shell execution for safe code execution and file manipulation",
+  "status": "available",
+  "icon": "terminal",
+  "category": "Development",
+  "is_mcp": false,
+  "dependencies": ["session_file_system"],
+  "features": ["file_system"],
+  "risk_level": "high"
+}
+```
+
+## Capability Properties
+
+### Description Markdown
+
+Capability descriptions support GitHub Flavored Markdown including:
+
+- Basic formatting: **bold**, *italic*, `code`, [links](url)
+- Lists (ordered and unordered)
+- Code blocks with syntax highlighting
+- Tables
+- GitHub-style alerts:
+
+```markdown
+> [!NOTE]
+> Highlights information that users should take into account.
+
+> [!TIP]
+> Optional information to help a user be more successful.
+
+> [!IMPORTANT]
+> Crucial information necessary for users to succeed.
+
+> [!WARNING]
+> Critical content demanding immediate user attention due to potential risks.
+
+> [!CAUTION]
+> Negative potential consequences of an action.
+```
+
+### Dependencies
+
+Capabilities can declare dependencies on other capabilities. When selected:
+
+1. Dependencies are automatically resolved
+2. Dependencies are applied before dependents (topological order)
+3. Users cannot remove a capability required by others
+
+**Example:** `virtual_bash` depends on `session_file_system`
+
+### Features
+
+Capabilities contribute UI features that determine which UI elements to show:
+
+| Feature | UI Element |
+|---------|------------|
+| `file_system` | Workspace tab |
+| `secrets` | Storage tab (secrets section) |
+| `key_value` | Storage tab (key/value section) |
+| `schedules` | Schedules tab |
+| `sql_database` | *(reserved)* |
+
+### Risk Levels
+
+| Level | Description | Admin Required |
+|-------|-------------|----------------|
+| `low` | Default. No special requirements. | No |
+| `medium` | Logged but allowed for org members. | No |
+| `high` | Can execute arbitrary code or access external resources. | Yes (Admin role) |
+
+High-risk capabilities require Admin role to assign to agents.
+
+## Built-in Capabilities
+
+### Utilities
+
+- `current_time` - Get current date and time
+
+### Network
+
+- `web_fetch` - Fetch content from URLs and convert HTML to markdown (high risk)
+
+### File System
+
+- `session_file_system` - Tools to access and manipulate files in session workspace
+
+### Development
+
+- `virtual_bash` - Sandboxed bash shell execution (high risk, depends on `session_file_system`)
+
+### Data
+
+- `sample_data` - Sample data files for demonstration (depends on `session_file_system`)
+
+### Storage
+
+- `session_storage` - Key/value and encrypted secret storage
+
+### Task Management
+
+- `stateless_todo_list` - Structured task lists for tracking work progress
+
+### Skills
+
+- `skills` - Discover and activate skills from session VFS (depends on `session_file_system`)
+
+### Management
+
+- `platform_management` - Programmatic management of harnesses, agents, sessions
+
+## MCP Capabilities
+
+MCP servers are exposed as virtual capabilities with:
+
+- ID format: `mcp:{server_uuid}`
+- Tool prefix: `mcp_{server_name}__`
+- Category: "MCP Servers"
+- Icon: "plug"
+- `is_mcp`: `true`
+
+MCP capabilities depend on server availability. If a server is inactive, it won't appear in the capability list.
+
+## Error Responses
+
+<ResponseField name="error" type="string">
+  Error message
+</ResponseField>
+
+<ResponseField name="status" type="integer">
+  HTTP status code
+</ResponseField>
+
+### Common Errors
+
+- **404 Not Found**: Capability does not exist or is not available
+- **500 Internal Server Error**: Server error during capability retrieval

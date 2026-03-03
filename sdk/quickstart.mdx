@@ -1,0 +1,175 @@
+---
+title: "Quickstart"
+description: "Build your first Everruns application"
+---
+
+## Overview
+
+This guide walks you through creating an agent, starting a session, and having a conversation using the Everruns SDK.
+
+## Prerequisites
+
+- Everruns server running (see [Development](/development))
+- SDK installed (see [Installation](/sdk/installation))
+
+## Create your first agent
+
+Agents are AI assistants with specific system prompts and capabilities.
+
+```typescript
+import { EverrunsClient } from 'everruns-sdk';
+
+const client = new EverrunsClient({
+  baseUrl: 'http://localhost:9300',
+});
+
+// Create an agent
+const agent = await client.agents.create({
+  name: 'My First Agent',
+  description: 'A helpful AI assistant',
+  system_prompt: 'You are a helpful AI assistant. Be concise and friendly.',
+});
+
+console.log('Agent created:', agent.id);
+```
+
+## Start a session
+
+Sessions are conversations with an agent. Each session maintains its own context.
+
+```typescript
+const session = await client.sessions.create({
+  agent_id: agent.id,
+  title: 'My First Conversation',
+});
+
+console.log('Session started:', session.id);
+```
+
+## Send a message
+
+Send messages to interact with your agent:
+
+```typescript
+// Send a user message
+const message = await client.messages.create(session.id, {
+  message: {
+    content: [
+      { type: 'text', text: 'Hello! Can you help me?' }
+    ]
+  }
+});
+
+console.log('Message sent:', message.id);
+```
+
+## Stream the response
+
+Listen to real-time events as the agent processes your message:
+
+```typescript
+// Subscribe to session events
+for await (const event of client.sessions.streamEvents(session.id)) {
+  if (event.type === 'output.message.delta') {
+    // Stream the agent's response
+    process.stdout.write(event.data.delta);
+  }
+  
+  if (event.type === 'output.message.completed') {
+    // Get the complete response
+    console.log('\n\nAgent response:', event.data.message.content[0].text);
+    break;
+  }
+}
+```
+
+## Complete example
+
+Here's a full example that creates an agent, starts a session, and has a conversation:
+
+```typescript
+import { EverrunsClient } from 'everruns-sdk';
+
+async function main() {
+  const client = new EverrunsClient({
+    baseUrl: 'http://localhost:9300',
+  });
+
+  // Create agent
+  const agent = await client.agents.create({
+    name: 'Research Assistant',
+    system_prompt: 'You are a research assistant. Help users find information.',
+  });
+
+  // Create session
+  const session = await client.sessions.create({
+    agent_id: agent.id,
+    title: 'Research Session',
+  });
+
+  // Send message
+  await client.messages.create(session.id, {
+    message: {
+      content: [
+        { type: 'text', text: 'What is machine learning?' }
+      ]
+    }
+  });
+
+  // Stream response
+  for await (const event of client.sessions.streamEvents(session.id)) {
+    if (event.type === 'output.message.delta') {
+      process.stdout.write(event.data.delta);
+    }
+    
+    if (event.type === 'output.message.completed') {
+      console.log('\n');
+      break;
+    }
+  }
+}
+
+main().catch(console.error);
+```
+
+## Error handling
+
+Always wrap API calls in try-catch blocks:
+
+```typescript
+try {
+  const agent = await client.agents.create({
+    name: 'My Agent',
+    system_prompt: 'You are helpful.',
+  });
+} catch (error) {
+  if (error instanceof EverrunsError) {
+    console.error('API error:', error.message);
+    console.error('Status code:', error.status);
+  } else {
+    console.error('Unexpected error:', error);
+  }
+}
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+
+<Card title="Working with Agents" icon="robot" href="/sdk/agents">
+  Learn more about creating and managing agents
+</Card>
+
+<Card title="Managing Sessions" icon="comments" href="/sdk/sessions">
+  Explore session management features
+</Card>
+
+<Card title="Event Streaming" icon="stream" href="/sdk/streaming">
+  Master real-time event handling
+</Card>
+
+<Card title="API Reference" icon="book" href="/api-reference/introduction">
+  Explore the complete API reference
+</Card>
+
+</CardGroup>
